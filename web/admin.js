@@ -54,7 +54,7 @@ async function films(v, page = 1, q = '') {
   $('#fs').onclick = () => films(v, 1, $('#fq').value.trim());
   $('#fq').onkeydown = e => { if (e.key === 'Enter') $('#fs').click(); };
   $('#pp').onclick = () => films(v, page - 1, q); $('#np').onclick = () => films(v, page + 1, q);
-  $('#sync').onclick = guard(async e => { e.target.disabled = true; toast('Syncing…'); const r = await api('/sync', { method: 'POST', body: { pages: 3 } }); toast(`Synced ${r.synced} dramas`); films(v, 1, q); });
+  $('#sync').onclick = guard(async e => { e.target.disabled = true; toast('Syncing…'); const r = await api('/sync', { method: 'POST', body: { pages: 3 } }); if (r.failed?.length) alert(`Saved ${r.synced} dramas.\n\nProblems:\n` + r.failed.join('\n')); else toast(`Saved ${r.synced} dramas`); films(v, 1, q); });
   v.querySelectorAll('tr[data-id]').forEach(tr => tr.addEventListener('change', guard(async e => {
     const k = e.target.dataset.k; if (!k) return;
     const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value.trim();

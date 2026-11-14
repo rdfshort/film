@@ -45,6 +45,8 @@ services:
         value: ""
       - key: SYLN_DEFAULT_PLATFORM
         value: shortmax
+      - key: SYLN_PLATFORMS
+        value: shortmax,blinkdrama
       - key: SYLN_LANG
         value: id                # check /languages; change to en if supported
       - key: SYLN_REQUESTS_PER_SECOND

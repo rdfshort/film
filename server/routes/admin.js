@@ -127,8 +127,9 @@ router.get('/logs', wrap(async (req, res) => {
   const { data } = await qb; res.json({ items: data || [] });
 }));
 router.post('/sync', wrap(async (req, res) => {
-  const r = await syln.syncCatalogue({ platform: req.body.platform || undefined, pages: clampInt(req.body.pages, 1, 20, 3) });
-  res.json(r);
+  try {
+    res.json(await syln.syncCatalogue({ platform: req.body.platform || undefined, pages: clampInt(req.body.pages, 1, 20, 3) }));
+  } catch (e) { res.status(502).json({ error: 'sync_failed', message: e.message }); }
 }));
 router.get('/platforms', wrap(async (_req, res) => res.json({ items: await syln.listPlatforms() })));
 

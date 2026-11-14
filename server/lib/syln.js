@@ -161,6 +161,7 @@ async function cachedFresh(key, ttlMs, loader) {
 }
 
 // ── normalisers ──
+const clean = v => String(v).replace(/\u0000/g, '');
 function normFilm(raw, platform) {
   const F = FIELD_MAP.film;
   const id = pick(raw, F.id);
@@ -170,8 +171,8 @@ function normFilm(raw, platform) {
   genres = (Array.isArray(genres) ? genres : []).map(g => (typeof g === 'string' ? g : g?.labelName || g?.name || g?.title || '')).map(s => s.trim()).filter(Boolean).slice(0, 8);
   return {
     id: platform ? `${platform}:${id}` : String(id), platform: platform || null,
-    title: String(pick(raw, F.title) || 'Untitled').slice(0, 200),
-    description: String(pick(raw, F.description) || '').slice(0, 2000),
+    title: clean(pick(raw, F.title) || 'Untitled').slice(0, 200),
+    description: clean(pick(raw, F.description) || '').slice(0, 2000),
     poster_url: pick(raw, F.poster) || null,
     genres,
     episode_count: Number(pick(raw, F.episodeCount)) || 0,
@@ -293,17 +294,24 @@ async function ping() {
 
 // ── persist metadata into Supabase cache (never overwrites admin settings) ──
 async function upsertFilms(films) {
-  if (!films.length) return;
-  const rows = films.map(f => ({ id: f.id, platform: f.platform, title: f.title, description: f.description, poster_url: f.poster_url, genres: f.genres, episode_count: f.episode_count, fetched_at: new Date().toISOString() }));
-  const { error } = await db.from('films').upsert(rows, { onConflict: 'id', ignoreDuplicates: false });
-  if (error) console.warn('[syln] upsertFilms', error.message);
+  const uniq = [...new Map(films.map(f => [f.id, f])).values()]; // duplicates in one batch make Postgres reject the whole upsert
+  const now = new Date().toISOString();
+  let saved = 0;
+  for (let i = 0; i < uniq.length; i += 100) {
+    const rows = uniq.slice(i, i + 100).map(f => ({ id: f.id, platform: f.platform, title: f.title, description: f.description, poster_url: f.poster_url, genres: f.genres, episode_count: f.episode_count, fetched_at: now }));
+    const { error } = await db.from('films').upsert(rows, { onConflict: 'id' });
+    if (error) throw new Error('database: ' + error.message);
+    saved += rows.length;
+  }
+  return saved;
 }
 async function upsertEpisodes(filmId, eps) {
-  if (!eps.length) return;
-  const rows = eps.map(e => ({ film_id: filmId, ep_no: e.ep_no, provider_episode_id: e.provider_episode_id, title: e.title, duration_sec: e.duration_sec, subtitles: e.subtitles }));
-  const { error } = await db.from('episodes').upsert(rows, { onConflict: 'film_id,ep_no', ignoreDuplicates: false });
-  if (error) console.warn('[syln] upsertEpisodes', error.message);
-  await db.from('films').update({ episode_count: Math.max(...eps.map(e => e.ep_no)) }).eq('id', filmId);
+  const uniq = [...new Map(eps.map(e => [e.ep_no, e])).values()];
+  if (!uniq.length) return;
+  const rows = uniq.map(e => ({ film_id: filmId, ep_no: e.ep_no, provider_episode_id: e.provider_episode_id, title: e.title, duration_sec: e.duration_sec, subtitles: e.subtitles }));
+  const { error } = await db.from('episodes').upsert(rows, { onConflict: 'film_id,ep_no' });
+  if (error) throw new Error('database: ' + error.message);
+  await db.from('films').update({ episode_count: Math.max(...uniq.map(e => e.ep_no)) }).eq('id', filmId);
 }
 
 let syncing = null;
@@ -314,14 +322,16 @@ async function syncCatalogue({ platform, pages = 3 } = {}) {
     let total = 0; const failed = [];
     for (const pl of targets) {
       try {
+        const seen = new Set();
         for (let p = 1; p <= pages; p++) {
-          const films = await listCatalog({ platform: pl, page: p });
-          if (!films.length) break;
-          await upsertFilms(films); total += films.length;
+          const fresh = (await listCatalog({ platform: pl, page: p })).filter(f => !seen.has(f.id));
+          if (!fresh.length) break;               // empty page, or the API repeats the same page: stop spending requests
+          fresh.forEach(f => seen.add(f.id));
+          total += await upsertFilms(fresh);
         }
-      } catch (e) { failed.push(pl); console.warn('[sync]', pl, e.message); }
+      } catch (e) { failed.push(`${pl}: ${e.message}`); console.warn('[sync]', pl, e.message); }
     }
-    if (!total && failed.length) throw new SylnError('Sync failed for: ' + failed.join(', '), 503, 'sync_failed');
+    if (!total && failed.length) throw new SylnError(failed.join('; '), 503, 'sync_failed');
     return { platform: targets.join(','), synced: total, failed };
   })().finally(() => { syncing = null; });
   return syncing;
@@ -341,6 +351,7 @@ async function ensureFilm(id, maxAgeMs = 6 * 3600_000) {
     await upsertEpisodes(id, eps);
     return true;
   } catch (e) {
+    console.warn('[ensureFilm]', id, e.message);
     return !!row; // API down: fall back to whatever we already cached
   }
 }

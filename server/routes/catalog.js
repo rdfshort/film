@@ -71,17 +71,21 @@ router.get('/films', wrap(async (req, res) => {
   const genre = String(req.query.genre || '').trim().slice(0, 40);
   const collection = String(req.query.collection || '').trim().slice(0, 60);
 
-  // Live Syln search for first page of a text query; results are cached into our DB.
-  if (q && page === 1) {
-    try { await syln.upsertFilms(await syln.search(q)); } catch (e) { /* API down → search our cache only */ }
-  }
-  let qb = db.from('films').select(CARD, { count: 'exact' }).eq('hidden', false);
-  if (q) qb = qb.ilike('title', `%${q.replace(/[%_,]/g, ' ')}%`);
-  if (genre) qb = qb.contains('genres', [genre]);
-  if (collection) qb = qb.contains('collections', [collection]);
+  const build = () => {
+    let qb = db.from('films').select(CARD, { count: 'exact' }).eq('hidden', false);
+    if (q) qb = qb.ilike('title', `%${q.replace(/[%_,]/g, ' ')}%`);
+    if (genre) qb = qb.contains('genres', [genre]);
+    if (collection) qb = qb.contains('collections', [collection]);
+    return qb;
+  };
   const sort = req.query.sort === 'popular' ? 'views' : 'created_at';
-  const { data, count, error } = await qb.order(sort, { ascending: false }).range((page - 1) * size, page * size - 1);
+  const run = () => build().order(sort, { ascending: false }).range((page - 1) * size, page * size - 1);
+  let { data, count, error } = await run();
   if (error) throw error;
+  // Search our own database first. Only when nothing matches do we spend a provider request (daily quota).
+  if (q && page === 1 && !count) {
+    try { await syln.upsertFilms(await syln.searchAll(q)); ({ data, count, error } = await run()); if (error) throw error; } catch { /* API down or over quota: show what we have */ }
+  }
   res.json({ films: data || [], total: count || 0, page, pageSize: size });
 }));
 
