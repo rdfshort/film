@@ -385,7 +385,7 @@ function wirePlayer() {
     $('#bu').style.width = pct + '%'; $('#bs').style.left = pct + '%'; $('#tm').textContent = `${fmtTime(c)} / ${fmtTime(d)}`;
   });
   v.addEventListener('ended', () => { saveProgress(true); if (P.next) loadEpisode(P.next); else endScreen(); });
-  v.addEventListener('error', () => refreshSource());
+  v.addEventListener('error', () => { if (!P.lastErr) P.lastErr = 'video element error ' + (v.error ? v.error.code + ' ' + (v.error.message || '') : ''); console.error('[player] video error', v.error); refreshSource(); });
   const bar = $('#bar');
   const seek = e => { const r = bar.getBoundingClientRect(); const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left; if (v.duration) v.currentTime = Math.min(1, Math.max(0, x / r.width)) * v.duration; };
   let drag = false;
@@ -402,7 +402,7 @@ const povSet = html => { const o = $('#pov'); if (o) o.innerHTML = html; };
 async function loadEpisode(ep) {
   const pv = $('#pv'), v = $('#vid'); if (!pv) return;
   saveProgress(true);
-  P.ep = ep; P.access = false; P.retries = 0; P.next = null;
+  P.ep = ep; P.access = false; P.retries = 0; P.next = null; P.lastErr = '';
   pv.classList.add('loading'); $('#lsp').classList.remove('hide'); povSet('');
   v.pause(); if (P.hls) { P.hls.destroy(); P.hls = null; }
   v.removeAttribute('src'); v.load();
@@ -435,7 +435,9 @@ function attach(url, type, subs) {
     P.hls = new Hls({ maxBufferLength: 20, startLevel: -1, capLevelToPlayerSize: true, enableWorker: true });
     P.hls.on(Hls.Events.ERROR, (_e, d) => {
       if (!d.fatal) return;
-      if (d.type === Hls.ErrorTypes.NETWORK_ERROR || d.type === Hls.ErrorTypes.MEDIA_ERROR) refreshSource(); else refreshSource();
+      P.lastErr = `${d.type} / ${d.details}${d.response ? ' / HTTP ' + d.response.code : ''}`;
+      console.error('[player] fatal HLS error', d);
+      refreshSource();
     });
     P.hls.loadSource(url); P.hls.attachMedia(v);
   } else { v.src = url; v.load(); }
@@ -457,7 +459,7 @@ async function refreshSource() {
   } catch (e) {
     ready0();
     if (e.status === 402) lockScreen(ep, e.data);
-    else povSet(`<div class="lock"><h3>Playback problem</h3><p class="muted">We couldn't load this episode. Check your connection and try again.</p><button class="btn" data-pv="retry">Try again</button><button class="btn sec" data-pv="back">Back to drama</button></div>`);
+    else povSet(`<div class="lock"><h3>Playback problem</h3><p class="muted">We couldn't load this episode. Check your connection and try again.</p>${P.lastErr ? `<p class="muted small" style="word-break:break-all">Details: ${esc(P.lastErr)}</p>` : ''}<button class="btn" data-pv="retry">Try again</button><button class="btn sec" data-pv="back">Back to drama</button></div>`);
   } finally { P.refreshing = false; }
 }
 
