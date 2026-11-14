@@ -207,7 +207,10 @@ function normPlay(raw) {
   const subs = (pick(root, P.subtitles) || []).map(s => ({
     lang: s.lang || s.language || s.code || 'en', label: s.label || s.name || s.lang || 'Subtitles', url: s.url || s.src || s.file,
   })).filter(s => s.url);
-  return { url: typeof url === 'string' ? url : null, subtitles: Array.isArray(subs) ? subs : [], expires_in: Number(pick(root, P.expires)) || null };
+  const u = typeof url === 'string' ? url : null;
+  let expiresAt = Number(root && root.expires) > 1e9 ? Number(root.expires) : 0;
+  if (!expiresAt && u) { const m = /[?&]auth_key=(\d{9,11})-/.exec(u); if (m) expiresAt = Number(m[1]); }
+  return { url: u, subtitles: Array.isArray(subs) ? subs : [], expires_in: Number(pick(root, P.expires)) || null, expires_at: expiresAt || null };
 }
 
 // Film ids are stored as "platform:code" so ids from different platforms never clash.
@@ -276,9 +279,17 @@ async function getPlayback(fullId, epRef, platform) {
     // No dedicated playback endpoint: the episode list carries the stream links. One call serves every
     // episode of that drama for 30 minutes (saves quota); links last hours, are never stored and never sent to the browser
     // except for the one episode the viewer is authorised to watch.
-    const list = (await episodesRaw(platform, id)).map((r, i) => ({ no: normEpisode(r, i).ep_no, id: pick(r, FIELD_MAP.episode.id), play: normPlay(r) }));
-    const hit = list.find(e => e.no === ref.no) || (ref.id != null ? list.find(e => String(e.id) === String(ref.id)) : null);
-    p = hit?.play || { url: null };
+    const find = async () => {
+      const list = (await episodesRaw(platform, id)).map((r, i) => ({ no: normEpisode(r, i).ep_no, id: pick(r, FIELD_MAP.episode.id), play: normPlay(r) }));
+      return (list.find(e => e.no === ref.no) || (ref.id != null ? list.find(e => String(e.id) === String(ref.id)) : null))?.play || { url: null };
+    };
+    const dead = x => x.url && x.expires_at && x.expires_at * 1000 < Date.now() + 60_000; // expired, or about to
+    p = await find();
+    if (dead(p)) { // our cache, or the provider's own cache, held an old link: fetch once more
+      cache.del(`syln:eps-raw:${platform}:${id}`); cache.del(`syln:eps-raw:${platform}:${id}:stale`);
+      p = await find();
+      if (dead(p)) { logCall('playback', 0, 0, `provider returned an expired link (expired ${new Date(p.expires_at * 1000).toISOString()})`); throw new SylnError('Provider returned an expired stream link', 503, 'stale_link'); }
+    }
   }
   if (!p.url) throw new SylnError('Episode unavailable', 404, 'unavailable');
   return p;
