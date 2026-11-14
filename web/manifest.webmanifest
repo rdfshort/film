@@ -1,0 +1,10 @@
+{
+  "name": "VUTA Short Dramas",
+  "short_name": "VUTA",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0a0a0f",
+  "theme_color": "#0a0a0f",
+  "icons": []
+}
