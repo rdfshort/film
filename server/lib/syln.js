@@ -3,24 +3,29 @@
 // The token is read from the environment and is only ever used in server-side requests.
 const { db, cache, env } = require('./core');
 
+// Render can't always store empty values, so the word "none" also means empty.
+const nz = v => (String(v).trim().toLowerCase() === 'none' ? '' : v);
+
 const cfg = {
   base: env('SYLN_BASE_URL', 'https://api.syln.dev').replace(/\/$/, ''),
   token: env('SYLN_API_TOKEN'),
   header: env('SYLN_AUTH_HEADER', 'Authorization'),
-  scheme: env('SYLN_AUTH_SCHEME', 'Bearer'),
+  scheme: nz(env('SYLN_AUTH_SCHEME', 'Bearer')),
   rps: Math.max(1, Number(env('SYLN_REQUESTS_PER_SECOND', 4))),
   timeout: Number(env('SYLN_TIMEOUT_MS', 10000)),
   defaultPlatform: env('SYLN_DEFAULT_PLATFORM'),
+  platforms: env('SYLN_PLATFORMS', '').split(',').map(x => x.trim()).filter(Boolean), // e.g. shortmax,blinkdrama
   lang: env('SYLN_LANG', ''),
   dailyBudget: Number(env('SYLN_DAILY_BUDGET', 0)), // 0 = unlimited; set 90 on a 100/day free plan
   paths: {
-    ping: env('SYLN_PATH_PING', ''),               // optional cheap health-check path
-    platforms: env('SYLN_PATH_PLATFORMS', '/platforms'),
+    ping: nz(env('SYLN_PATH_PING', '')),               // optional cheap health-check path
+    // when SYLN_PLATFORMS is set the platform list is fixed, so no platforms endpoint is called
+    platforms: nz(env('SYLN_PATH_PLATFORMS', env('SYLN_PLATFORMS', '') ? '' : '/platforms')),
     catalog: env('SYLN_PATH_CATALOG', '/platforms/{platform}/films'),
     search: env('SYLN_PATH_SEARCH', '/platforms/{platform}/search'),
     film: env('SYLN_PATH_FILM', '/platforms/{platform}/films/{id}'),
     episodes: env('SYLN_PATH_EPISODES', '/platforms/{platform}/films/{id}/episodes'),
-    play: env('SYLN_PATH_PLAY', '/platforms/{platform}/films/{id}/episodes/{ep}/play'),
+    play: nz(env('SYLN_PATH_PLAY', '')),               // empty: stream links come from the episode list
   },
   params: { page: env('SYLN_PARAM_PAGE', 'page'), q: env('SYLN_PARAM_QUERY', 'q'), genre: env('SYLN_PARAM_GENRE', 'genre'), lang: env('SYLN_PARAM_LANG', 'lang') },
 };
@@ -164,7 +169,7 @@ function normFilm(raw, platform) {
   if (typeof genres === 'string') genres = genres.split(/[,|/]/);
   genres = (Array.isArray(genres) ? genres : []).map(g => (typeof g === 'string' ? g : g?.labelName || g?.name || g?.title || '')).map(s => s.trim()).filter(Boolean).slice(0, 8);
   return {
-    id: String(id), platform: platform || null,
+    id: platform ? `${platform}:${id}` : String(id), platform: platform || null,
     title: String(pick(raw, F.title) || 'Untitled').slice(0, 200),
     description: String(pick(raw, F.description) || '').slice(0, 2000),
     poster_url: pick(raw, F.poster) || null,
@@ -204,10 +209,13 @@ function normPlay(raw) {
   return { url: typeof url === 'string' ? url : null, subtitles: Array.isArray(subs) ? subs : [], expires_in: Number(pick(root, P.expires)) || null };
 }
 
+// Film ids are stored as "platform:code" so ids from different platforms never clash.
+const splitId = (id, platform) => { const s = String(id), i = s.indexOf(':'); return i > 0 ? { platform: s.slice(0, i), code: s.slice(i + 1) } : { platform, code: s }; };
+
 // ── public API ──
 async function listPlatforms() {
   // Providers whose platform is part of the URL (e.g. apishort: /v1/shortmax/...) have no platforms endpoint.
-  if (!cfg.paths.platforms) return [{ id: cfg.defaultPlatform || 'default', name: cfg.defaultPlatform || 'default' }];
+  if (!cfg.paths.platforms) { const l = cfg.platforms.length ? cfg.platforms : [cfg.defaultPlatform || 'default']; return l.map(x => ({ id: x, name: x })); }
   return cachedFresh('syln:platforms', 10 * 60_000, async () => {
     const j = await call(cfg.paths.platforms);
     return toList(j).map(p => typeof p === 'string' ? { id: p, name: p } : { id: String(pick(p, FIELD_MAP.platform.id)), name: String(pick(p, FIELD_MAP.platform.name) || pick(p, FIELD_MAP.platform.id)) });
@@ -215,6 +223,7 @@ async function listPlatforms() {
 }
 async function defaultPlatform() {
   if (cfg.defaultPlatform) return cfg.defaultPlatform;
+  if (cfg.platforms.length) return cfg.platforms[0];
   const p = await listPlatforms();
   if (!p.length) throw new SylnError('No Syln platforms available', 503, 'no_platform');
   return p[0].id;
@@ -227,6 +236,11 @@ async function listCatalog({ platform, page = 1, genre } = {}) {
     return toList(j).map(r => normFilm(r, platform)).filter(Boolean);
   });
 }
+async function searchAll(q) {
+  const out = [];
+  for (const pl of (await listPlatforms()).map(x => x.id)) { try { out.push(...await search(q, { platform: pl })); } catch { /* one platform down: keep the rest */ } }
+  return out;
+}
 async function search(q, { platform, page = 1 } = {}) {
   platform = platform || await defaultPlatform();
   return cachedFresh(`syln:s:${platform}:${q.toLowerCase()}:${page}`, 5 * 60_000, async () => {
@@ -234,24 +248,24 @@ async function search(q, { platform, page = 1 } = {}) {
     return toList(j).map(r => normFilm(r, platform)).filter(Boolean);
   });
 }
-async function getFilm(id, platform) {
-  platform = platform || await defaultPlatform();
+async function getFilm(fullId, platform) {
+  const sp = splitId(fullId, platform); platform = sp.platform || await defaultPlatform(); const id = sp.code;
   return cachedFresh(`syln:film:${platform}:${id}`, 30 * 60_000, async () => {
     const j = await call(fill(cfg.paths.film, { platform, id }));
     const raw = j && j.data && !Array.isArray(j.data) && typeof j.data === 'object' ? j.data : j;
     return normFilm(raw, platform);
   });
 }
-async function getEpisodes(id, platform) {
-  platform = platform || await defaultPlatform();
-  return cachedFresh(`syln:eps:${platform}:${id}`, 30 * 60_000, async () => {
-    const j = await call(fill(cfg.paths.episodes, { platform, id }));
-    return toList(j).map(normEpisode).sort((a, b) => a.ep_no - b.ep_no);
-  });
+// One cached provider call feeds both the episode list and playback (the list carries the stream links).
+// Held in memory only, never stored in the database and never sent to browsers except per authorised episode.
+const episodesRaw = (platform, id) => cachedFresh(`syln:eps-raw:${platform}:${id}`, 30 * 60_000, async () => toList(await call(fill(cfg.paths.episodes, { platform, id }))));
+async function getEpisodes(fullId, platform) {
+  const sp = splitId(fullId, platform); platform = sp.platform || await defaultPlatform(); const id = sp.code;
+  return (await episodesRaw(platform, id)).map(normEpisode).sort((a, b) => a.ep_no - b.ep_no);
 }
 // Playback URLs are signed and expire: never cached, always requested fresh when an episode opens.
-async function getPlayback(id, epRef, platform) {
-  platform = platform || await defaultPlatform();
+async function getPlayback(fullId, epRef, platform) {
+  const sp = splitId(fullId, platform); platform = sp.platform || await defaultPlatform(); const id = sp.code;
   const ref = typeof epRef === 'object' ? epRef : { no: Number(epRef), id: null };
   let p;
   if (cfg.paths.play) {
@@ -261,10 +275,7 @@ async function getPlayback(id, epRef, platform) {
     // No dedicated playback endpoint: the episode list carries the stream links. One call serves every
     // episode of that drama for 30 minutes (saves quota); links last hours, are never stored and never sent to the browser
     // except for the one episode the viewer is authorised to watch.
-    const list = await cachedFresh(`syln:play-eps:${platform}:${id}`, 30 * 60_000, async () => {
-      const j = await call(fill(cfg.paths.episodes, { platform, id }), {}, { retries: 1 });
-      return toList(j).map((r, i) => ({ no: normEpisode(r, i).ep_no, id: pick(r, FIELD_MAP.episode.id), play: normPlay(r) }));
-    });
+    const list = (await episodesRaw(platform, id)).map((r, i) => ({ no: normEpisode(r, i).ep_no, id: pick(r, FIELD_MAP.episode.id), play: normPlay(r) }));
     const hit = list.find(e => e.no === ref.no) || (ref.id != null ? list.find(e => String(e.id) === String(ref.id)) : null);
     p = hit?.play || { url: null };
   }
@@ -299,14 +310,19 @@ let syncing = null;
 async function syncCatalogue({ platform, pages = 3 } = {}) {
   if (syncing) return syncing;
   syncing = (async () => {
-    let total = 0;
-    platform = platform || await defaultPlatform();
-    for (let p = 1; p <= pages; p++) {
-      const films = await listCatalog({ platform, page: p });
-      if (!films.length) break;
-      await upsertFilms(films); total += films.length;
+    const targets = platform ? [platform] : (await listPlatforms()).map(x => x.id);
+    let total = 0; const failed = [];
+    for (const pl of targets) {
+      try {
+        for (let p = 1; p <= pages; p++) {
+          const films = await listCatalog({ platform: pl, page: p });
+          if (!films.length) break;
+          await upsertFilms(films); total += films.length;
+        }
+      } catch (e) { failed.push(pl); console.warn('[sync]', pl, e.message); }
     }
-    return { platform, synced: total };
+    if (!total && failed.length) throw new SylnError('Sync failed for: ' + failed.join(', '), 503, 'sync_failed');
+    return { platform: targets.join(','), synced: total, failed };
   })().finally(() => { syncing = null; });
   return syncing;
 }
@@ -329,4 +345,4 @@ async function ensureFilm(id, maxAgeMs = 6 * 3600_000) {
   }
 }
 
-module.exports = { cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };
+module.exports = { cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, searchAll, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };
