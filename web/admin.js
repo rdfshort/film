@@ -27,7 +27,7 @@ $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-t]
 async function go() {
   renderTabs();
   const v = $('#view'); v.innerHTML = '<div class="center"><div class="spin"></div></div>';
-  try { await ({ overview, films, pricing, payments, users, apiTab })[tab](v); } catch (e) { v.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  try { await ({ overview, films, pricing, payments, users, api: apiTab })[tab](v); } catch (e) { v.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 
 /* ── overview ── */
