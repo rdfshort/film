@@ -27,7 +27,7 @@ router.post('/play', wrap(async (req, res) => {
     return res.status(402).json({ error: a.reason, locked: true, price: a.price, vipOnly: a.vipOnly, balance: w?.balance || 0 });
   }
   try {
-    const p = await syln.getPlayback(filmId, episode.provider_episode_id || ep, film.platform);
+    const p = await syln.getPlayback(filmId, { no: ep, id: episode.provider_episode_id }, film.platform);
     const { data: next } = await db.from('episodes').select('ep_no').eq('film_id', filmId).eq('hidden', false).gt('ep_no', ep).order('ep_no').limit(1);
     const { data: hist } = await db.from('watch_history').select('position_sec').eq('user_id', req.user.id).eq('film_id', filmId).eq('ep_no', ep).maybeSingle();
     res.set('Cache-Control', 'no-store');

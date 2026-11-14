@@ -11,7 +11,10 @@ const cfg = {
   rps: Math.max(1, Number(env('SYLN_REQUESTS_PER_SECOND', 4))),
   timeout: Number(env('SYLN_TIMEOUT_MS', 10000)),
   defaultPlatform: env('SYLN_DEFAULT_PLATFORM'),
+  lang: env('SYLN_LANG', ''),
+  dailyBudget: Number(env('SYLN_DAILY_BUDGET', 0)), // 0 = unlimited; set 90 on a 100/day free plan
   paths: {
+    ping: env('SYLN_PATH_PING', ''),               // optional cheap health-check path
     platforms: env('SYLN_PATH_PLATFORMS', '/platforms'),
     catalog: env('SYLN_PATH_CATALOG', '/platforms/{platform}/films'),
     search: env('SYLN_PATH_SEARCH', '/platforms/{platform}/search'),
@@ -19,7 +22,7 @@ const cfg = {
     episodes: env('SYLN_PATH_EPISODES', '/platforms/{platform}/films/{id}/episodes'),
     play: env('SYLN_PATH_PLAY', '/platforms/{platform}/films/{id}/episodes/{ep}/play'),
   },
-  params: { page: env('SYLN_PARAM_PAGE', 'page'), q: env('SYLN_PARAM_QUERY', 'q'), genre: env('SYLN_PARAM_GENRE', 'genre') },
+  params: { page: env('SYLN_PARAM_PAGE', 'page'), q: env('SYLN_PARAM_QUERY', 'q'), genre: env('SYLN_PARAM_GENRE', 'genre'), lang: env('SYLN_PARAM_LANG', 'lang') },
 };
 
 // Candidate response field names per value; first non-empty wins. Override with SYLN_FIELD_MAP.
@@ -60,7 +63,22 @@ const toList = (j) => {
   if (v && typeof v === 'object') { const inner = toList(v); if (inner.length) return inner; }
   return [];
 };
-const fill = (tpl, vars) => tpl.replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent(String(vars[k] ?? '')));
+const fill = (tpl, vars) => tpl.replace(/\{(\w+)\}/g, (_, k) => encodeURIComponent(String((k === 'lang' ? cfg.lang : vars[k]) ?? '')));
+
+// ── daily request budget (protects a free plan such as 100 requests/day) ──
+let budgetDay = '', budgetUsed = 0, budgetLoaded = false;
+async function takeBudget() {
+  if (!cfg.dailyBudget) return;
+  const day = new Date().toISOString().slice(0, 10);
+  if (day !== budgetDay) { budgetDay = day; budgetUsed = 0; budgetLoaded = false; }
+  if (!budgetLoaded) {
+    budgetLoaded = true; // count what this process doesn't know about (restarts, other instances)
+    const { count } = await db.from('api_logs').select('id', { count: 'exact', head: true }).gte('ts', day + 'T00:00:00Z').gt('status', 0);
+    budgetUsed = Math.max(budgetUsed, count || 0);
+  }
+  if (budgetUsed >= cfg.dailyBudget) throw new SylnError('Daily Syln request budget used up', 503, 'quota');
+  budgetUsed++;
+}
 
 // ── rate limiting: serialise requests with a minimum gap (default 4 req/s) ──
 let last = 0, chain = Promise.resolve();
@@ -86,10 +104,12 @@ class SylnError extends Error {
 async function call(path, query = {}, { retries = 2 } = {}) {
   if (!cfg.token) throw new SylnError('Syln API token is not configured', 503, 'no_token');
   const url = new URL(cfg.base + path);
+  if (cfg.lang && cfg.params.lang && !url.searchParams.has(cfg.params.lang)) url.searchParams.set(cfg.params.lang, cfg.lang);
   Object.entries(query).forEach(([k, v]) => { if (v !== undefined && v !== '') url.searchParams.set(k, v); });
   const headers = { Accept: 'application/json', [cfg.header]: cfg.scheme ? `${cfg.scheme} ${cfg.token}` : cfg.token };
 
   for (let attempt = 0; ; attempt++) {
+    await takeBudget();
     await slot();
     const t0 = Date.now(), ac = new AbortController(), timer = setTimeout(() => ac.abort(), cfg.timeout);
     try {
@@ -176,6 +196,8 @@ function normPlay(raw) {
 
 // ── public API ──
 async function listPlatforms() {
+  // Providers whose platform is part of the URL (e.g. apishort: /v1/shortmax/...) have no platforms endpoint.
+  if (!cfg.paths.platforms) return [{ id: cfg.defaultPlatform || 'default', name: cfg.defaultPlatform || 'default' }];
   return cachedFresh('syln:platforms', 10 * 60_000, async () => {
     const j = await call(cfg.paths.platforms);
     return toList(j).map(p => typeof p === 'string' ? { id: p, name: p } : { id: String(pick(p, FIELD_MAP.platform.id)), name: String(pick(p, FIELD_MAP.platform.name) || pick(p, FIELD_MAP.platform.id)) });
@@ -218,16 +240,32 @@ async function getEpisodes(id, platform) {
   });
 }
 // Playback URLs are signed and expire: never cached, always requested fresh when an episode opens.
-async function getPlayback(id, ep, platform) {
+async function getPlayback(id, epRef, platform) {
   platform = platform || await defaultPlatform();
-  const j = await call(fill(cfg.paths.play, { platform, id, ep }), {}, { retries: 1 });
-  const p = normPlay(j);
+  const ref = typeof epRef === 'object' ? epRef : { no: Number(epRef), id: null };
+  let p;
+  if (cfg.paths.play) {
+    const j = await call(fill(cfg.paths.play, { platform, id, ep: ref.id || ref.no }), {}, { retries: 1 });
+    p = normPlay(j);
+  } else {
+    // No dedicated playback endpoint: the episode list carries the stream links. One call serves every
+    // episode of that drama for a few minutes (saves quota); links are still short-lived, never stored.
+    const list = await cachedFresh(`syln:play-eps:${platform}:${id}`, 3 * 60_000, async () => {
+      const j = await call(fill(cfg.paths.episodes, { platform, id }), {}, { retries: 1 });
+      return toList(j).map((r, i) => ({ no: normEpisode(r, i).ep_no, id: pick(r, FIELD_MAP.episode.id), play: normPlay(r) }));
+    });
+    const hit = list.find(e => e.no === ref.no) || (ref.id != null ? list.find(e => String(e.id) === String(ref.id)) : null);
+    p = hit?.play || { url: null };
+  }
   if (!p.url) throw new SylnError('Episode unavailable', 404, 'unavailable');
   return p;
 }
 async function ping() {
   const t0 = Date.now();
-  try { const p = await listPlatforms(); return { ok: true, ms: Date.now() - t0, platforms: p.length, tokenConfigured: !!cfg.token }; }
+  try {
+    if (cfg.paths.ping) { const pl = await defaultPlatform(); await call(fill(cfg.paths.ping, { platform: pl }), {}, { retries: 0 }); return { ok: true, ms: Date.now() - t0, platforms: 1, tokenConfigured: !!cfg.token }; }
+    const p = await listPlatforms(); return { ok: true, ms: Date.now() - t0, platforms: p.length, tokenConfigured: !!cfg.token };
+  }
   catch (e) { return { ok: false, ms: Date.now() - t0, error: e.message, tokenConfigured: !!cfg.token }; }
 }
 

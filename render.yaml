@@ -34,27 +34,34 @@ services:
         sync: false
       - key: PAYSTACK_CURRENCY
         value: KES
-      # Syln
+      # APIShort (catalogue + playback). Key goes in SYLN_API_TOKEN (name kept from the first version).
       - key: SYLN_BASE_URL
-        value: https://api.syln.dev
+        value: https://apishort.com
       - key: SYLN_API_TOKEN
         sync: false
       - key: SYLN_AUTH_HEADER
-        value: Authorization
+        value: X-API-Key
       - key: SYLN_AUTH_SCHEME
-        value: Bearer
+        value: ""
+      - key: SYLN_DEFAULT_PLATFORM
+        value: shortmax
+      - key: SYLN_LANG
+        value: id                # check /languages; change to en if supported
       - key: SYLN_REQUESTS_PER_SECOND
-        value: "4"
-      # Endpoint paths: placeholders until checked against the Syln docs
+        value: "2"
+      - key: SYLN_DAILY_BUDGET
+        value: "90"              # free plan = 100 requests/day
+      - key: SYLN_PATH_PING
+        value: /v1/{platform}/api/v1/languages
       - key: SYLN_PATH_PLATFORMS
-        value: /platforms
+        value: ""
       - key: SYLN_PATH_CATALOG
-        value: /platforms/{platform}/films
+        value: /v1/{platform}/api/v1/popular
       - key: SYLN_PATH_SEARCH
-        value: /platforms/{platform}/search
+        value: /v1/{platform}/api/v1/search
       - key: SYLN_PATH_FILM
-        value: /platforms/{platform}/films/{id}
+        value: /v1/{platform}/api/v1/detail/{id}
       - key: SYLN_PATH_EPISODES
-        value: /platforms/{platform}/films/{id}/episodes
+        value: /v1/{platform}/api/v1/alleps/{id}
       - key: SYLN_PATH_PLAY
-        value: /platforms/{platform}/films/{id}/episodes/{ep}/play
+        value: ""                # empty = stream links come from the episode list
