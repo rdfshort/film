@@ -63,5 +63,9 @@ services:
         value: /v1/{platform}/api/v1/detail/{id}
       - key: SYLN_PATH_EPISODES
         value: /v1/{platform}/api/v1/alleps/{id}
+      - key: SYLN_FIELD_MAP
+        value: '{"film":{"id":["code"],"episodeCount":["episodes"],"genres":["tags"]}}'
+      - key: SYLN_QUALITY
+        value: "720"             # 480 / 720 / 1080
       - key: SYLN_PATH_PLAY
         value: ""                # empty = stream links come from the episode list

@@ -162,7 +162,7 @@ function normFilm(raw, platform) {
   if (id === undefined) return null;
   let genres = pick(raw, F.genres) ?? [];
   if (typeof genres === 'string') genres = genres.split(/[,|/]/);
-  genres = (Array.isArray(genres) ? genres : []).map(g => (typeof g === 'string' ? g : g?.name || g?.title || '')).map(s => s.trim()).filter(Boolean).slice(0, 8);
+  genres = (Array.isArray(genres) ? genres : []).map(g => (typeof g === 'string' ? g : g?.labelName || g?.name || g?.title || '')).map(s => s.trim()).filter(Boolean).slice(0, 8);
   return {
     id: String(id), platform: platform || null,
     title: String(pick(raw, F.title) || 'Untitled').slice(0, 200),
@@ -184,10 +184,20 @@ function normEpisode(raw, idx) {
     subtitles: subs,
   };
 }
+// Some providers return {video_1080, video_720, video_480}; choose the one closest to SYLN_QUALITY (default 720p,
+// a good balance for slower mobile networks).
+function pickQuality(obj) {
+  const target = Number(env('SYLN_QUALITY', 720)) || 720;
+  const opts = Object.entries(obj).filter(([, v]) => typeof v === 'string' && v).map(([k, v]) => [parseInt(k.replace(/\D/g, ''), 10) || 0, v]);
+  if (!opts.length) return undefined;
+  opts.sort((a, b) => Math.abs(a[0] - target) - Math.abs(b[0] - target));
+  return opts[0][1];
+}
 function normPlay(raw) {
   const P = FIELD_MAP.play;
   const root = raw && typeof raw === 'object' && raw.data && typeof raw.data === 'object' && !Array.isArray(raw.data) ? raw.data : raw;
-  const url = pick(root, P.url);
+  let url = pick(root, P.url);
+  if (!url) { const vid = root && (root.video || root.videos || root.qualities); if (vid && typeof vid === 'object') url = pickQuality(vid); }
   const subs = (pick(root, P.subtitles) || []).map(s => ({
     lang: s.lang || s.language || s.code || 'en', label: s.label || s.name || s.lang || 'Subtitles', url: s.url || s.src || s.file,
   })).filter(s => s.url);
@@ -249,8 +259,9 @@ async function getPlayback(id, epRef, platform) {
     p = normPlay(j);
   } else {
     // No dedicated playback endpoint: the episode list carries the stream links. One call serves every
-    // episode of that drama for a few minutes (saves quota); links are still short-lived, never stored.
-    const list = await cachedFresh(`syln:play-eps:${platform}:${id}`, 3 * 60_000, async () => {
+    // episode of that drama for 30 minutes (saves quota); links last hours, are never stored and never sent to the browser
+    // except for the one episode the viewer is authorised to watch.
+    const list = await cachedFresh(`syln:play-eps:${platform}:${id}`, 30 * 60_000, async () => {
       const j = await call(fill(cfg.paths.episodes, { platform, id }), {}, { retries: 1 });
       return toList(j).map((r, i) => ({ no: normEpisode(r, i).ep_no, id: pick(r, FIELD_MAP.episode.id), play: normPlay(r) }));
     });
@@ -307,7 +318,8 @@ async function ensureFilm(id, maxAgeMs = 6 * 3600_000) {
   const stale = !row || !count || Date.now() - new Date(row.fetched_at).getTime() > maxAgeMs;
   if (!stale) return true;
   try {
-    const film = await getFilm(id, row?.platform);
+    // The catalogue list already gave us the metadata; only fetch details for unknown films (saves quota).
+    const film = row ? null : await getFilm(id);
     if (film) await upsertFilms([film]);
     const eps = await getEpisodes(id, film?.platform || row?.platform);
     await upsertEpisodes(id, eps);
