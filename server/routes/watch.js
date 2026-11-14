@@ -39,6 +39,7 @@ router.post('/play', wrap(async (req, res) => {
     });
   } catch (e) {
     const code = e.code || 'upstream_error';
+    if (code === 'stale_link') return res.status(503).json({ error: 'stale_link', message: 'This episode is temporarily unavailable. Please try another one.' });
     res.status(code === 'unavailable' || code === 'not_found' ? 404 : 503).json({ error: code === 'unavailable' || code === 'not_found' ? 'unavailable' : 'service_unavailable', message: 'This episode cannot be played right now. Please try again shortly.' });
   }
 }));
