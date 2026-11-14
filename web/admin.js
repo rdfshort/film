@@ -157,7 +157,10 @@ async function apiTab(v, errorsOnly = false) {
     sb.auth.onAuthStateChange((_e, s) => { if (s) session = s; });
     go();
   } catch (e) {
-    gate.innerHTML = e.status === 403 ? '<p>This account is not an administrator.</p><a class="btn" href="index.html">Back to site</a>' : '<p>Could not reach the server.</p>';
+    const back = '<a class="btn" href="index.html">Back to site</a>';
+    if (e.status === 403) gate.innerHTML = '<p>This account is not an administrator.</p>' + back;
+    else if (e.status === 401) gate.innerHTML = '<p>Your login has expired. Log out and log in again on the main site, then reopen this page.</p>' + back;
+    else gate.innerHTML = `<p>Could not load the admin page.</p><p class="muted small">Reason: ${esc(e.status ? 'server replied ' + e.status + ' (' + (e.data?.error || e.message) + ')' : e.message || 'unknown')}</p><p class="muted small">Check <a href="/api/health" style="color:var(--ac)">/api/health</a> and <a href="/api/public-config" style="color:var(--ac)">/api/public-config</a>.</p>` + back;
   }
 })();
 })();
