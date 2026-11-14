@@ -8,7 +8,7 @@ const dt = d => d ? new Date(d).toLocaleString('en-KE', { dateStyle: 'medium', t
 let sb, session, cfg;
 
 async function api(path, { method = 'GET', body } = {}) {
-  const r = await fetch(API + path, { method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + session.access_token }, body: body ? JSON.stringify(body) : undefined });
+  const r = await fetch(API + '/admin' + path, { method, headers: { 'Content-Type': 'application/json', Authorization: 'Bearer ' + session.access_token }, body: body ? JSON.stringify(body) : undefined });
   const d = await r.json().catch(() => ({}));
   if (!r.ok) throw Object.assign(new Error(d.message || d.error || 'error'), { status: r.status, data: d });
   return d;
