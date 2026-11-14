@@ -1,0 +1,60 @@
+# Render Blueprint: one Web Service that runs the API and also serves the site (web/).
+# Deploy: push the repo to GitHub, then Render dashboard -> New -> Blueprint -> pick the repo.
+# Variables marked sync:false are prompted for in the dashboard (never stored in git).
+services:
+  - type: web
+    name: vuta
+    runtime: node
+    plan: free
+    region: frankfurt            # closest to Kenya; change if your Supabase region is elsewhere
+    # No rootDir on purpose: the server serves ../web, so the whole repo must be present.
+    buildCommand: cd server && npm install
+    startCommand: cd server && npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: SERVE_WEB
+        value: "true"
+      # Set both to your Render URL, e.g. https://vuta.onrender.com (no trailing slash)
+      - key: PUBLIC_WEB_URL
+        sync: false
+      - key: CORS_ORIGINS
+        sync: false
+      # Supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      # Paystack (start with sk_test_...)
+      - key: PAYSTACK_SECRET_KEY
+        sync: false
+      - key: PAYSTACK_CURRENCY
+        value: KES
+      # Syln
+      - key: SYLN_BASE_URL
+        value: https://api.syln.dev
+      - key: SYLN_API_TOKEN
+        sync: false
+      - key: SYLN_AUTH_HEADER
+        value: Authorization
+      - key: SYLN_AUTH_SCHEME
+        value: Bearer
+      - key: SYLN_REQUESTS_PER_SECOND
+        value: "4"
+      # Endpoint paths: placeholders until checked against the Syln docs
+      - key: SYLN_PATH_PLATFORMS
+        value: /platforms
+      - key: SYLN_PATH_CATALOG
+        value: /platforms/{platform}/films
+      - key: SYLN_PATH_SEARCH
+        value: /platforms/{platform}/search
+      - key: SYLN_PATH_FILM
+        value: /platforms/{platform}/films/{id}
+      - key: SYLN_PATH_EPISODES
+        value: /platforms/{platform}/films/{id}/episodes
+      - key: SYLN_PATH_PLAY
+        value: /platforms/{platform}/films/{id}/episodes/{ep}/play
