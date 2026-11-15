@@ -1,0 +1,32 @@
+# ONE-TIME: creates your app signing key. Run it once, download the result, save it safely, then delete the artifact.
+# Run: GitHub repo -> Actions -> "Create signing key (one time)" -> Run workflow.
+name: Create signing key (one time)
+on:
+  workflow_dispatch:
+
+jobs:
+  keygen:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - name: Generate keystore with random passwords
+        run: |
+          mkdir out
+          PASS=$(openssl rand -hex 16)
+          keytool -genkeypair -v -keystore out/release.jks -alias reeldrama \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass "$PASS" -keypass "$PASS" \
+            -dname "CN=ReelDrama, O=ReelDrama, C=KE" >/dev/null
+          base64 -w0 out/release.jks > out/ANDROID_KEYSTORE_BASE64.txt
+          echo -n "$PASS" > out/ANDROID_KEY_PASSWORD.txt
+          rm out/release.jks
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: signing-key-SECRET
+          path: out/
+          retention-days: 1

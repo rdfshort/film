@@ -1,39 +1,86 @@
-name: Build Android test APK
+# Builds a SIGNED release APK and publishes it on the repo's Releases page.
+# Needs 2 repository secrets: ANDROID_KEYSTORE_BASE64 and ANDROID_KEY_PASSWORD (see make-signing-key.yml).
+# Run: GitHub repo -> Actions -> "Release signed APK" -> Run workflow.
+name: Release signed APK
 on:
   workflow_dispatch:
     inputs:
+      version:
+        description: "Version name, e.g. 1.0.0"
+        required: true
+        default: "1.0.0"
+      version_code:
+        description: "Build number: a whole number that goes UP with every release (1, 2, 3...)"
+        required: true
+        default: "1"
       api_url:
         description: "Your Render URL (no trailing slash)"
         required: true
         default: "https://reeldramafilm.onrender.com"
 
+permissions:
+  contents: write
+
 jobs:
-  build:
+  release:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-node@v4
         with:
           node-version: 20
+
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: 17
+
       - name: Prepare web files for the app
         run: |
           rm -rf mobile/www && mkdir -p mobile/www
           cp -r web/. mobile/www/
           echo "window.VUTA_API = '${{ github.event.inputs.api_url }}';" > mobile/www/config.js
-      - name: Install Capacitor and create the Android project
+
+      - name: Create the Android project
         working-directory: mobile
         run: |
           npm install
           npx cap add android
           npx cap sync android
-      - name: Build debug APK
+
+      - name: Set version
+        working-directory: mobile/android/app
+        run: |
+          sed -i "s/versionCode [0-9]*/versionCode ${{ github.event.inputs.version_code }}/" build.gradle
+          sed -i "s/versionName \"[^\"]*\"/versionName \"${{ github.event.inputs.version }}\"/" build.gradle
+          grep -nE "versionCode|versionName" build.gradle
+
+      - name: Build unsigned release APK
         working-directory: mobile/android
-        run: ./gradlew assembleDebug --no-daemon
-      - uses: actions/upload-artifact@v4
-        with:
-          name: reeldrama-debug-apk
-          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Sign the APK
+        env:
+          KS_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KS_PASS: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$KS_B64" && test -n "$KS_PASS" || { echo "Missing signing secrets"; exit 1; }
+          echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+          BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
+          IN=$(ls mobile/android/app/build/outputs/apk/release/*.apk | head -1)
+          "$BT/zipalign" -f -p 4 "$IN" "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" sign --ks "$RUNNER_TEMP/release.jks" --ks-key-alias reeldrama \
+            --ks-pass env:KS_PASS --key-pass env:KS_PASS \
+            --out ReelDrama.apk "$RUNNER_TEMP/aligned.apk"
+          "$BT/apksigner" verify --print-certs ReelDrama.apk
+          rm -f "$RUNNER_TEMP/release.jks"
+
+      - name: Publish to Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "v${{ github.event.inputs.version }}" \
+            "ReelDrama.apk" \
+            --title "ReelDrama ${{ github.event.inputs.version }}" \
+            --notes "Signed Android build ${{ github.event.inputs.version }}"
