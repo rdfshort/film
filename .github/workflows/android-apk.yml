@@ -39,6 +39,15 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Add Firebase (phone notifications)
+        env:
+          GSJ: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          if [ -n "$GSJ" ]; then printf '%s' "$GSJ" > mobile/android/app/google-services.json; echo "Firebase config added"; else echo "No GOOGLE_SERVICES_JSON secret: building without phone push"; fi
+          M=mobile/android/app/src/main/AndroidManifest.xml
+          sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <application#' $M
+          sed -i 's#</application>#    <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_notify" />\n    </application>#' $M
+
       - name: Apply the app logo
         run: |
           RES=mobile/android/app/src/main/res
