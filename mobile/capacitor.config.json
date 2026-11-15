@@ -1,0 +1,9 @@
+{
+  "appId": "com.reeldramafilm.app",
+  "appName": "ReelDrama",
+  "webDir": "www",
+  "server": { "androidScheme": "https" },
+  "plugins": {
+    "CapacitorHttp": { "enabled": true }
+  }
+}
