@@ -4,7 +4,16 @@ const API = (window.VUTA_API || '').replace(/\/$/, '') + '/api';
 const NATIVE = !!(window.Capacitor && window.Capacitor.isNativePlatform && window.Capacitor.isNativePlatform());
 const $ = (s, r = document) => r.querySelector(s);
 const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const fmtKes = n => 'KSh ' + Number(n).toLocaleString('en-KE', { maximumFractionDigits: 0 });
+// Prices are stored and charged in KES. Visitors outside Kenya are shown USD (KES / rate, default 130).
+const fmtKesOnly = n => 'KSh ' + Number(n).toLocaleString('en-KE', { maximumFractionDigits: 0 });
+function cur() {
+  try { const p = localStorage.getItem('vuta_cur'); if (p === 'KES' || p === 'USD') return p; } catch {}
+  try { if (Intl.DateTimeFormat().resolvedOptions().timeZone === 'Africa/Nairobi') return 'KES'; } catch {}
+  const c = S.cfg && S.cfg.country; if (c) return c === 'KE' ? 'KES' : 'USD';
+  return /-KE\b/i.test(navigator.language || '') ? 'KES' : 'USD';
+}
+const usdRate = () => Number(S.cfg && S.cfg.usdRate) || 130;
+const fmtKes = n => cur() === 'USD' ? '$' + (Number(n) / usdRate()).toFixed(2) : fmtKesOnly(n);
 const fmtTime = s => { s = Math.max(0, Math.floor(s || 0)); return Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); };
 const fmtDate = d => new Date(d).toLocaleDateString('en-KE', { day: 'numeric', month: 'short', year: 'numeric' });
 
@@ -159,7 +168,7 @@ function checkout(kind, item) {
     <div class="field" id="phf"><label>M-Pesa phone number</label><input id="ph" inputmode="tel" placeholder="0712 345 678" value="${esc(localStorage.getItem('vuta_phone') || '')}"></div>
     <div class="err hide" id="perr"></div>
     <button class="btn block" id="go">Pay ${fmtKes(item.price_kes)}</button>
-    <p class="small muted" style="text-align:center">Secured by Paystack</p>`);
+    <p class="small muted" style="text-align:center">${cur() === 'USD' ? `You will be charged ${fmtKesOnly(item.price_kes)} (about ${fmtKes(item.price_kes)}). ` : ''}Secured by Paystack</p>`);
   const sync = () => { $('#phf', m.el).classList.toggle('hide', channel !== 'mpesa'); };
   sync();
   m.el.addEventListener('click', e => { const b = e.target.closest('[data-ch]'); if (!b) return; channel = b.dataset.ch; m.el.querySelectorAll('[data-ch]').forEach(x => x.classList.toggle('on', x === b)); sync(); });
@@ -331,7 +340,7 @@ async function vProfile(t) {
     (m.subscription?.auto_renew ? '<div class="li small muted">Auto-renews by card. Cancel anytime from your Paystack receipt email.</div>' : '') +
     `<div class="li"><span style="flex:1">Coin balance</span><span>${Number(m.balance || 0).toLocaleString()}</span></div>` +
     `<div class="li"><span style="flex:1">Member since</span><span>${m.created_at ? fmtDate(m.created_at) : ''}</span></div></div>` +
-    `<div class="pad" style="display:grid;gap:10px"><button class="btn gold block" data-act="vip">${ic('crown')} ${m.vip ? 'Extend VIP' : 'Go VIP'}</button><button class="btn sec block" data-act="rename">Edit name</button>${m.role === 'admin' ? '<a class="btn sec block" href="admin.html">Admin dashboard</a>' : ''}<button class="btn sec block" data-act="logout">Log out</button></div>`;
+    `<div class="pad" style="display:grid;gap:10px"><button class="btn gold block" data-act="vip">${ic('crown')} ${m.vip ? 'Extend VIP' : 'Go VIP'}</button><button class="btn sec block" data-act="rename">Edit name</button><button class="btn sec block" data-act="cur">Currency: ${cur() === 'USD' ? 'USD ($)' : 'KSh'} · tap to change</button>${m.role === 'admin' ? '<a class="btn sec block" href="admin.html">Admin dashboard</a>' : ''}<button class="btn sec block" data-act="logout">Log out</button></div>`;
 }
 
 async function vFilm(t, id) {
@@ -375,7 +384,18 @@ function saveProgress(force) {
   api('/progress', { method: 'POST', body: { filmId: P.id, ep: P.ep, position: pos, duration: Math.floor(v.duration || 0) } }).catch(() => {});
 }
 
+function appPrompt() {
+  const ios = /iPhone|iPad|iPod/i.test(navigator.userAgent);
+  modal(`<div style="text-align:center"><img src="icons/icon-192.png" alt="" width="72" height="72" style="border-radius:18px;margin-bottom:10px"><h3>Watch in the ${esc(S.cfg.siteName || 'ReelDrama')} app</h3>
+    <p class="muted">${ios ? 'Episodes play in our Android app. An iPhone version is not available yet.' : 'Episodes play in our free Android app, with smooth playback and offline downloads for VIP.'}</p>
+    ${ios ? '' : '<a class="btn block" href="download.html">Download the app</a>'}</div>`);
+}
 async function openPlayer(id, ep) {
+  if (!NATIVE && !(S.cfg && S.cfg.webPlayback)) { // the website cannot stream these videos: send viewers to the app
+    const t = tok; history.replaceState(null, '', '#/film/' + encodeURIComponent(id));
+    if (!$('#main').querySelector('.det')) vFilm(t, id);
+    return appPrompt();
+  }
   if (!S.session) { location.hash = '#/film/' + encodeURIComponent(id); return authModal('login'); }
   if (P.open && P.id === id) return loadEpisode(ep);
   closePlayer(true);
@@ -567,6 +587,7 @@ const actions = {
     try { await api('/me/list/' + encodeURIComponent(id), { method: has ? 'DELETE' : 'PUT' }); a.innerHTML = `${ic(has ? 'plus' : 'check')} My List`; toast(has ? 'Removed from My List' : 'Added to My List'); } catch { toast('Could not update list'); }
   },
 };
+actions.cur = () => { try { localStorage.setItem('vuta_cur', cur() === 'USD' ? 'KES' : 'USD'); } catch {} route(); };
 document.addEventListener('click', e => { const a = e.target.closest('[data-act]'); if (a && actions[a.dataset.act]) actions[a.dataset.act](a, e); });
 
 function route() {

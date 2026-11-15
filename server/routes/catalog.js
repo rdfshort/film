@@ -28,6 +28,9 @@ router.get('/public-config', wrap(async (_req, res) => {
   res.json({
     supabaseUrl: config.supabaseUrl, supabaseAnonKey: config.supabaseAnon,
     siteName: s.site_name || 'VUTA', paymentMethods: s.payment_methods || {},
+    country: (() => { const k = String(_req.headers['cf-ipcountry'] || '').toUpperCase(); return /^[A-Z]{2}$/.test(k) && k !== 'XX' && k !== 'T1' ? k : ''; })(),
+    usdRate: Number(process.env.USD_RATE) || 130,
+    webPlayback: process.env.WEB_PLAYBACK === 'true',
     imageProxy: process.env.IMAGE_PROXY || '',
     storeBillingRequired: process.env.NATIVE_STORE_BILLING === 'true',
     freeEpisodes: s.free_episodes, packages: pk.data || [], plans: pl.data || [],
