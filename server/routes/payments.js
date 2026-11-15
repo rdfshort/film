@@ -3,6 +3,7 @@ const router = require('express').Router();
 const { db, config, getSettings, wrap, isUuid } = require('../lib/core');
 const { requireAuth } = require('../lib/auth');
 const ps = require('../lib/paystack');
+const push = require('../lib/push');
 
 const CHANNELS = ['mpesa', 'card', 'apple_pay'];
 
@@ -14,6 +15,14 @@ function normPhone(p) {
   return /^254[17]\d{8}$/.test(m) ? '+' + m : null;
 }
 
+async function tellPaid(reference) {
+  const { data: t } = await db.from('transactions').select('user_id,kind,coins').eq('reference', reference).maybeSingle();
+  if (!t) return;
+  await push.notify({ audience: 'user', userIds: [t.user_id], kind: 'payment', url: '#/wallet',
+    title: t.kind === 'vip' ? 'VIP activated' : 'Payment received',
+    body: t.kind === 'vip' ? 'Your VIP is now active. Enjoy!' : `${Number(t.coins).toLocaleString()} coins were added to your wallet.` });
+}
+
 // Verify with Paystack (server → server) and credit atomically. Safe to call many times.
 async function verifyAndCredit(reference) {
   const d = await ps.verify(reference);
@@ -22,6 +31,7 @@ async function verifyAndCredit(reference) {
     if (d.currency && d.currency !== config.currency) return { status: 'failed', error: 'currency_mismatch' };
     const { data, error } = await db.rpc('credit_purchase', { p_reference: reference, p_paid_kes: Number(d.amount) / 100, p_channel: d.channel || null, p_gateway: d });
     if (error) throw error;
+    if (data.ok && !data.already) tellPaid(reference).catch(e => console.warn('[notify]', e.message));
     return { status: data.ok ? 'success' : 'failed', error: data.error, already: data.already };
   }
   if (d.status === 'failed') {

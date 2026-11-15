@@ -36,11 +36,12 @@ const IC = {
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   check: '<path d="M5 12l5 5 9-10"/>',
+  bell: '<path d="M6 17v-6a6 6 0 0 1 12 0v6l2 2H4zM10 21h4"/>',
   download: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
 };
 const ic = n => `<svg class="i" viewBox="0 0 24 24">${IC[n]}</svg>`;
 
-const S = { cfg: null, sb: null, session: null, me: null, film: {}, afterPay: null };
+const S = { unread: 0, cfg: null, sb: null, session: null, me: null, film: {}, afterPay: null };
 
 /* ───────── network ───────── */
 async function api(path, { method = 'GET', body, auth = true } = {}) {
@@ -97,7 +98,7 @@ function topBar(extra = '') {
   const right = S.session
     ? `<a class="coinpill" href="#/wallet">${ic('coin')}<span id="pillbal">${m ? Number(m.balance).toLocaleString() : '…'}</span></a>`
     : `<button class="btn sm" data-act="login">Log in</button>`;
-  return `<div class="top"><span class="brand"><img class="logo" src="icons/favicon.png" alt="" width="26" height="26">${esc(S.cfg.siteName || 'VUTA')}</span><span class="sp"></span>${extra}${right}</div>`;
+  return `<div class="top"><span class="brand"><img class="logo" src="icons/favicon.png" alt="" width="26" height="26">${esc(S.cfg.siteName || 'VUTA')}</span><span class="sp"></span>${extra}${S.session ? `<a class="ib bell" href="#/notifications" aria-label="Notifications">${ic('bell')}<i class="dot${S.unread ? '' : ' hide'}" id="bdot"></i></a>` : ''}${right}</div>`;
 }
 function needLogin(msg) {
   $('#main').innerHTML = topBar() + `<div class="empty"><p>${esc(msg)}</p><button class="btn" data-act="login">Log in or sign up</button></div>`;
@@ -576,7 +577,7 @@ const actions = {
   reload: () => route(true),
   back: (_a, e) => { e.preventDefault(); history.length > 1 ? history.back() : (location.hash = '#/home'); },
   vip: () => vipSheet(),
-  logout: async () => { await S.sb.auth.signOut(); S.me = null; location.hash = '#/home'; toast('Logged out'); },
+  logout: async () => { if (pushToken) { try { await api('/notifications/token/remove', { method: 'POST', body: { token: pushToken } }); } catch {} } S.unread = 0; await S.sb.auth.signOut(); S.me = null; location.hash = '#/home'; toast('Logged out'); },
   rename: () => {
     const m = modal(`<h3>Edit name</h3><div class="field"><input id="nn" maxlength="40" value="${esc(S.me?.display_name || '')}"></div><button class="btn block" id="sv">Save</button>`);
     $('#sv', m.el).onclick = async () => { try { await api('/me', { method: 'PATCH', body: { display_name: $('#nn', m.el).value } }); await refreshMe(); m.close(); route(true); } catch { toast('Could not save name'); } };
@@ -599,6 +600,7 @@ function route() {
   window.scrollTo(0, 0);
   if (v === 'discover') return vDiscover(t, q);
   if (v === 'library') return vLibrary(t, q);
+  if (v === 'notifications') return vNotifications(t);
   if (v === 'wallet') return vWallet(t, q);
   if (v === 'profile') return vProfile(t);
   if (v === 'film' && parts[1]) return vFilm(t, parts[1]);
@@ -632,16 +634,37 @@ function dlOfflineFilm(id) {
   return { film: { id, title: items[0].filmTitle, poster_url: items[0].poster }, episodes: items.map(i => ({ ep_no: i.ep, title: i.title || 'Episode ' + i.ep, is_free: true })).sort((a, b) => a.ep_no - b.ep_no), inList: false };
 }
 async function pool(jobs, n, fn) { let i = 0; await Promise.all(Array.from({ length: n }, async () => { while (i < jobs.length) { const j = jobs[i++]; await fn(j); } })); }
-const dlText = async u => { const r = await fetch(u); if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); };
+const CH = () => window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.CapacitorHttp;
+const errTxt = e => String((e && (e.message || e.errorMessage || e.code)) || e || 'unknown').slice(0, 90);
+const dlText = async u => {
+  try { const r = await fetch(u); if (!r.ok) throw new Error('HTTP ' + r.status); return await r.text(); }
+  catch (e1) { // fall back to the native HTTP client
+    const h = CH(); if (!h) throw e1;
+    const r = await h.get({ url: u, responseType: 'text' });
+    if (r.status < 200 || r.status >= 300) throw new Error('HTTP ' + r.status);
+    return typeof r.data === 'string' ? r.data : JSON.stringify(r.data);
+  }
+};
+// Saves one remote file to the phone. Tries the native downloader first, then a plain request written out as a file.
+async function dlFile(F, url, path) {
+  try { await F.downloadFile({ url, path, directory: 'DATA', recursive: true }); return; }
+  catch (e1) {
+    const h = CH(); if (!h) throw e1;
+    const r = await h.get({ url, responseType: 'blob' });
+    if (r.status < 200 || r.status >= 300 || !r.data) throw new Error('HTTP ' + r.status);
+    await F.writeFile({ path, data: r.data, directory: 'DATA', recursive: true });
+  }
+}
 
 // Downloads an HLS stream into dir/index.m3u8 + numbered pieces; returns the playlist file name.
 async function dlHls(url, dir, onPct) {
   const F = FSP();
-  let txt = await dlText(url), base = url;
+  let txt, base = url;
+  try { txt = await dlText(url); } catch (e) { throw new Error('playlist: ' + errTxt(e)); }
   if (/#EXT-X-STREAM-INF/.test(txt)) { // master playlist: take the best quality variant
     const L = txt.split(/\r?\n/); let best = null, bw = -1;
     for (let i = 0; i < L.length; i++) { const m = /BANDWIDTH=(\d+)/.exec(L[i]); if (L[i].startsWith('#EXT-X-STREAM-INF') && L[i + 1] && !L[i + 1].startsWith('#')) { const b = m ? +m[1] : 0; if (b > bw) { bw = b; best = L[i + 1].trim(); } } }
-    base = new URL(best, url).href; txt = await dlText(base);
+    if (best) { base = new URL(best, url).href; txt = await dlText(base); }
   }
   const jobs = [], out = []; let n = 0;
   const local = (abs) => { const ext = (new URL(abs).pathname.match(/\.[a-z0-9]{1,5}$/i) || ['.bin'])[0]; const name = 'p' + (n++) + ext; jobs.push({ url: abs, name }); return name; };
@@ -653,7 +676,7 @@ async function dlHls(url, dir, onPct) {
   if (!jobs.length) throw new Error('empty playlist');
   let done = 0;
   await pool(jobs, 4, async j => {
-    for (let a = 0; ; a++) { try { await F.downloadFile({ url: j.url, path: dir + '/' + j.name, directory: 'DATA', recursive: true }); break; } catch (e) { if (a >= 2) throw e; } }
+    for (let a = 0; ; a++) { try { await dlFile(F, j.url, dir + '/' + j.name); break; } catch (e) { if (a >= 2) throw new Error('piece ' + j.name + ': ' + errTxt(e)); } }
     onPct(Math.round(++done / jobs.length * 100));
   });
   await F.writeFile({ path: dir + '/index.m3u8', data: out.join('\n'), directory: 'DATA', encoding: 'utf8', recursive: true });
@@ -681,13 +704,14 @@ async function downloadEpisode() {
   try {
     let file;
     if (d.type === 'hls') file = await dlHls(d.url, dir, setPct);
-    else { file = 'video.mp4'; await FSP().downloadFile({ url: d.url, path: dir + '/' + file, directory: 'DATA', recursive: true }); }
+    else { file = 'video.mp4'; await dlFile(FSP(), d.url, dir + '/' + file); }
     const rec = { id, ep, dir, file, type: d.type === 'hls' ? 'hls' : 'file', until: d.downloadUntil, title: 'Episode ' + ep, filmTitle: P.film.title, poster: P.film.poster_url || '', at: Date.now() };
     dlWrite(dlAll().filter(x => !(x.id === id && x.ep === ep)).concat(rec));
     toast('Saved to your phone ✓');
   } catch (e) {
     try { await FSP().rmdir({ path: dir, directory: 'DATA', recursive: true }); } catch {}
-    toast('Download failed. Check your connection and try again.');
+    console.error('[download]', e);
+    toast('Download failed: ' + errTxt(e));
   } finally {
     DLB.busy = false; const x = $('#dlb em'); if (x) { x.textContent = 'VIP'; x.style.color = ''; }
   }
@@ -697,6 +721,40 @@ function dlHtml() {
   const l = dlAll().sort((a, b) => b.at - a.at);
   if (!l.length) return `<div class="empty"><p>No downloads yet. Open an episode and tap the download button.</p></div>`;
   return `<div class="box">${l.map(u => `<div class="li"><a href="#/watch/${encodeURIComponent(u.id)}/${u.ep}" style="flex:1;color:inherit;text-decoration:none">${esc(u.filmTitle)}<div class="muted small">Episode ${u.ep}${dlExpired(u) ? ' · expired' : ''}</div></a><button class="btn sm sec" data-dldel="${esc(u.id)}|${u.ep}">Remove</button></div>`).join('')}</div>`;
+}
+
+/* ───────── notifications: inbox bell + phone push ───────── */
+async function refreshBell() {
+  if (!S.session) { S.unread = 0; return; }
+  try { const d = await api('/notifications'); S.unread = d.unread; const x = $('#bdot'); if (x) x.classList.toggle('hide', !S.unread); } catch {}
+}
+async function vNotifications(t) {
+  if (!S.session) return needLogin('Log in to see your notifications.');
+  $('#main').innerHTML = topBar() + `<div class="center"><div class="spin"></div></div>`;
+  let d; try { d = await api('/notifications'); } catch (e) { if (t !== tok) return; return void ($('#main').innerHTML = topBar() + errView(netMsg(e))); }
+  if (t !== tok) return;
+  $('#main').innerHTML = topBar() + `<h2 style="padding:6px 16px 0;margin:0">Notifications</h2>` + (d.items.length
+    ? `<div class="box" style="margin-top:10px">${d.items.map(n => `<a class="li" href="${/^#\//.test(n.url || '') ? esc(n.url) : '#/notifications'}" style="color:inherit;text-decoration:none">${n.unread ? '<i class="dot2"></i>' : ''}<span style="flex:1"><b>${esc(n.title)}</b>${n.body ? `<div class="muted small">${esc(n.body)}</div>` : ''}<div class="muted small">${fmtDate(n.created_at)}</div></span></a>`).join('')}</div>`
+    : `<div class="empty"><p>No notifications yet.</p></div>`);
+  if (d.unread) { api('/notifications/seen', { method: 'POST' }).catch(() => {}); }
+  S.unread = 0; const x = $('#bdot'); if (x) x.classList.add('hide');
+}
+let pushWired = false, pushToken = '';
+async function initPush() {
+  const PN = NATIVE && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.PushNotifications;
+  if (!PN || !S.session) return;
+  try {
+    if (!pushWired) {
+      pushWired = true;
+      PN.addListener('registration', r => { pushToken = r.value; api('/notifications/token', { method: 'POST', body: { token: r.value } }).catch(() => {}); });
+      PN.addListener('registrationError', e => console.warn('[push] registration error', e));
+      PN.addListener('pushNotificationReceived', n => { toast((n.title || 'New notification') + (n.body ? ': ' + n.body : '')); refreshBell(); });
+      PN.addListener('pushNotificationActionPerformed', a => { const u = a && a.notification && a.notification.data && a.notification.data.url; location.hash = /^#\//.test(u || '') ? u : '#/notifications'; });
+    }
+    let p = await PN.checkPermissions();
+    if (p.receive === 'prompt' || p.receive === 'prompt-with-rationale') p = await PN.requestPermissions();
+    if (p.receive === 'granted') await PN.register();
+  } catch (e) { console.warn('[push]', e); }
 }
 
 /* ───────── boot ───────── */
@@ -709,9 +767,11 @@ async function boot() {
   S.sb.auth.onAuthStateChange(async (ev, session) => {
     const was = !!S.session; S.session = session;
     if (ev === 'PASSWORD_RECOVERY') return newPasswordModal();
-    if (ev === 'SIGNED_IN' && !was || ev === 'SIGNED_OUT') { S.film = {}; await refreshMe(); route(); }
+    if (ev === 'SIGNED_IN' && !was || ev === 'SIGNED_OUT') { S.film = {}; await refreshMe(); route(); if (ev === 'SIGNED_IN') { refreshBell(); initPush(); } }
   });
   try { await refreshMe(); } catch {}
+  refreshBell(); initPush();
+  document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBell(); });
   window.addEventListener('hashchange', route);
   if (navigator.onLine === false && FSP() && !location.hash) location.hash = '#/library?tab=downloads';
   window.addEventListener('offline', () => toast('You are offline'));

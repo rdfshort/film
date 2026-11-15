@@ -3,6 +3,7 @@ const { db, cache, wrap, clampInt, isUuid, safeId } = require('../lib/core');
 const { requireAdmin } = require('../lib/auth');
 const syln = require('../lib/syln');
 const ps = require('../lib/paystack');
+const push = require('../lib/push');
 
 router.use(requireAdmin);
 
@@ -175,6 +176,28 @@ router.post('/users/:id/coins', wrap(async (req, res) => {
   const { data, error } = await db.rpc('admin_adjust_coins', { p_user: req.params.id, p_delta: delta, p_note: String(req.body.note || 'admin').slice(0, 60) });
   if (error) throw error;
   res.json(data);
+}));
+
+router.get('/notifications', wrap(async (_req, res) => {
+  const [{ data: items }, { count }] = await Promise.all([
+    db.from('notifications').select('id,audience,title,body,created_at').neq('audience', 'user').order('created_at', { ascending: false }).limit(30),
+    db.from('device_tokens').select('id', { count: 'exact', head: true }),
+  ]);
+  res.json({ items: items || [], devices: count || 0, pushReady: push.isReady() });
+}));
+router.post('/notify', wrap(async (req, res) => {
+  const audience = String(req.body.audience || '');
+  if (!['all', 'vip', 'user'].includes(audience)) return res.status(400).json({ error: 'bad_audience', message: 'Pick who to send to.' });
+  const title = String(req.body.title || '').trim(), body = String(req.body.body || '').trim();
+  if (!title) return res.status(400).json({ error: 'title_required', message: 'Add a title.' });
+  let userIds = [];
+  if (audience === 'user') {
+    const email = String(req.body.email || '').trim().toLowerCase();
+    const { data: u } = await db.from('profiles').select('id').ilike('email', email).maybeSingle();
+    if (!u) return res.status(404).json({ error: 'no_user', message: 'No user with that email.' });
+    userIds = [u.id];
+  }
+  res.json(await push.notify({ audience, userIds, title, body, url: req.body.url, kind: 'announcement' }));
 }));
 
 module.exports = router;

@@ -176,3 +176,7 @@ th{color:var(--mu);font-weight:500;font-size:12px}
 
 .dlb{position:relative}
 .dlb em{position:absolute;top:-1px;left:50%;transform:translateX(-50%);font-style:normal;font-size:9px;font-weight:800;letter-spacing:.4px;color:#ff3b3b;line-height:1}
+
+.bell{position:relative}
+.dot{position:absolute;top:8px;right:8px;width:9px;height:9px;border-radius:50%;background:#ff3b3b;box-shadow:0 0 0 2px var(--bg,#0a0a0f)}
+.dot2{width:8px;height:8px;border-radius:50%;background:#ff3b3b;flex:none;margin-right:10px}

@@ -16,7 +16,7 @@ async function api(path, { method = 'GET', body } = {}) {
 let tt; const toast = m => { let el = $('#toast'); if (!el) { el = document.createElement('div'); el.id = 'toast'; el.style.bottom = '24px'; document.body.appendChild(el); } el.textContent = m; el.classList.remove('hide'); clearTimeout(tt); tt = setTimeout(() => el.classList.add('hide'), 3000); };
 const guard = fn => async (...a) => { try { return await fn(...a); } catch (e) { toast(e.message || 'Failed'); } };
 
-const TABS = [['overview', 'Overview'], ['films', 'Catalogue'], ['pricing', 'Pricing & VIP'], ['payments', 'Payments'], ['users', 'Users'], ['api', 'Syln API']];
+const TABS = [['overview', 'Overview'], ['films', 'Catalogue'], ['pricing', 'Pricing & VIP'], ['payments', 'Payments'], ['users', 'Users'], ['notify', 'Notifications'], ['api', 'Syln API']];
 let tab = 'overview';
 
 function renderTabs() {
@@ -27,7 +27,7 @@ $('#tabs').addEventListener('click', e => { const b = e.target.closest('[data-t]
 async function go() {
   renderTabs();
   const v = $('#view'); v.innerHTML = '<div class="center"><div class="spin"></div></div>';
-  try { await ({ overview, films, pricing, payments, users, api: apiTab })[tab](v); } catch (e) { v.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
+  try { await ({ overview, films, pricing, payments, users, notify, api: apiTab })[tab](v); } catch (e) { v.innerHTML = `<div class="empty">${esc(e.message)}</div>`; }
 }
 
 /* ── overview ── */
@@ -130,6 +130,28 @@ async function users(v, q = '', page = 1) {
     $('[data-coins]', tr).onclick = guard(async () => { const n = prompt('Add (positive) or remove (negative) coins:', '50'); if (!n) return; const r = await api(`/users/${id}/coins`, { method: 'POST', body: { delta: n, note: 'admin' } }); if (!r.ok) throw new Error('Not allowed (balance cannot go below 0)'); toast('Balance: ' + r.balance); users(v, q, page); });
     $('[data-dis]', tr).onclick = guard(async () => { await api('/users/' + id, { method: 'PATCH', body: { disabled: !row[id].disabled } }); users(v, q, page); });
     $('[data-role]', tr).onclick = guard(async e => { if (!confirm('Change this user\'s role?')) return; await api('/users/' + id, { method: 'PATCH', body: { role: e.target.dataset.role } }); users(v, q, page); });
+  });
+}
+
+/* ── notifications ── */
+async function notify(v) {
+  const d = await api('/notifications');
+  v.innerHTML = `<div class="card" style="padding:14px;margin-bottom:14px"><b>Send a notification</b>
+    <div class="muted small" style="margin:4px 0 10px">${d.devices} phone${d.devices === 1 ? '' : 's'} registered for push. ${d.pushReady ? '' : '<b style="color:#ff6b6b">Push is not set up on the server yet, so messages only appear in the in-app inbox.</b>'}</div>
+    <div class="frm" style="flex-direction:column;align-items:stretch;gap:8px">
+      <select id="na"><option value="all">Everyone</option><option value="vip">VIP members</option><option value="user">One user (by email)</option></select>
+      <input id="ne" class="hide" placeholder="User email">
+      <input id="nt" maxlength="80" placeholder="Title, e.g. New dramas this week">
+      <input id="nb" maxlength="200" placeholder="Message (optional)">
+      <select id="nu"><option value="">Opens the app</option><option value="#/home">Opens Home</option><option value="#/wallet">Opens Wallet</option><option value="#/discover">Opens Discover</option></select>
+      <button class="btn" id="ns">Send</button></div></div>
+    <div class="tw"><table><tr><th>Date</th><th>To</th><th>Title</th><th>Message</th></tr>${d.items.map(n => `<tr><td>${dt(n.created_at)}</td><td>${esc(n.audience)}</td><td>${esc(n.title)}</td><td>${esc(n.body)}</td></tr>`).join('') || '<tr><td colspan="4" class="muted">Nothing sent yet.</td></tr>'}</table></div>`;
+  $('#na').onchange = () => $('#ne').classList.toggle('hide', $('#na').value !== 'user');
+  $('#ns').onclick = guard(async () => {
+    const title = $('#nt').value.trim(); if (!title) return toast('Add a title');
+    if (!confirm('Send this notification now?')) return;
+    const r = await api('/notify', { method: 'POST', body: { audience: $('#na').value, email: $('#ne').value, title, body: $('#nb').value, url: $('#nu').value } });
+    toast(`Sent. Pushed to ${r.pushed} phone${r.pushed === 1 ? '' : 's'}.`); notify(v);
   });
 }
 

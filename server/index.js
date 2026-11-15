@@ -45,6 +45,7 @@ app.get('/api/health', (_req, res) => res.json({ ok: true }));
 app.use('/api', require('./routes/catalog'));
 app.use('/api', require('./routes/watch'));
 app.use('/api/me', require('./routes/me'));
+app.use('/api/notifications', require('./routes/notifications'));
 app.use('/api/pay', payments.router);
 app.use('/api/admin', require('./routes/admin'));
 
