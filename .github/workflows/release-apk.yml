@@ -49,6 +49,15 @@ jobs:
           npx cap add android
           npx cap sync android
 
+      - name: Apply the app logo
+        run: |
+          RES=mobile/android/app/src/main/res
+          cp -r mobile/icons/res/. $RES/
+          rm -f $RES/drawable-v24/ic_launcher_foreground.xml $RES/drawable/ic_launcher_background.xml
+          for n in ic_launcher ic_launcher_round; do
+            printf '<?xml version="1.0" encoding="utf-8"?>\n<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n    <background android:drawable="@color/ic_launcher_background"/>\n    <foreground android:drawable="@mipmap/ic_launcher_foreground"/>\n</adaptive-icon>\n' > $RES/mipmap-anydpi-v26/$n.xml
+          done
+
       - name: Set version
         working-directory: mobile/android/app
         run: |
