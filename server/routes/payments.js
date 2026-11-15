@@ -32,8 +32,9 @@ async function verifyAndCredit(reference) {
 }
 
 async function createCheckout(req, res, kind) {
-  if (req.headers['x-client'] === 'native') {
-    // App Store / Google Play rules: digital goods in native apps must use store billing.
+  if (req.headers['x-client'] === 'native' && process.env.NATIVE_STORE_BILLING === 'true') {
+    // Only for builds distributed through Google Play / the App Store, which require their own billing.
+    // Leave NATIVE_STORE_BILLING unset for an APK you host and distribute yourself.
     return res.status(409).json({ error: 'use_store_billing', message: 'Purchases in the mobile app use the app store. Use the website to pay with M-Pesa or card.' });
   }
   const channel = String(req.body.channel || '');

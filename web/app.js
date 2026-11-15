@@ -138,7 +138,7 @@ function methodsAvail() {
 }
 function checkout(kind, item) {
   if (!S.session) return authModal('login');
-  if (NATIVE) return modal(`<h3>Buy in the app store</h3><p class="muted">In the mobile app, coins and VIP are purchased through the App Store / Google Play. You can also pay by M-Pesa or card on our website.</p><button class="btn block" data-close>OK</button>`);
+  if (NATIVE && S.cfg.storeBillingRequired) return modal(`<h3>Buy in the app store</h3><p class="muted">In the mobile app, coins and VIP are purchased through the App Store / Google Play. You can also pay by M-Pesa or card on our website.</p><button class="btn block" data-close>OK</button>`);
   const methods = methodsAvail();
   if (!methods.length) return toast('Payments are not available right now.');
   let channel = methods[0][0];
@@ -159,7 +159,14 @@ function checkout(kind, item) {
     try {
       if (channel === 'mpesa') localStorage.setItem('vuta_phone', phone);
       const r = await api(kind === 'vip' ? '/pay/vip' : '/pay/coins', { method: 'POST', body: { [kind === 'vip' ? 'planId' : 'packageId']: item.id, channel, phone } });
-      if (r.mode === 'redirect') { location.href = r.url; return; }
+      if (r.mode === 'redirect') {
+        const B = NATIVE && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Browser;
+        if (!B) { location.href = r.url; return; }
+        // In the app: open Paystack in the phone's browser and keep this screen, which polls for the result.
+        await B.open({ url: r.url });
+        m.el.innerHTML = `<div class="center" style="flex-direction:column;align-items:center;gap:14px"><div class="spin"></div><h3>Complete your payment</h3><p class="muted" style="text-align:center">Finish paying in the browser, then come back here. This screen updates by itself.</p></div>`;
+        pollPayment(r.reference, m); return;
+      }
       m.el.innerHTML = `<div class="center" style="flex-direction:column;align-items:center;gap:14px"><div class="spin"></div><h3>Check your phone</h3><p class="muted" style="text-align:center">${esc(r.message)}</p></div>`;
       pollPayment(r.reference, m);
     } catch (e) { err.textContent = e.data?.message || (e.offline ? netMsg(e) : 'Could not start payment.'); err.classList.remove('hide'); btn.disabled = false; }
