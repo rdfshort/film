@@ -1,0 +1,39 @@
+name: Build Android test APK
+on:
+  workflow_dispatch:
+    inputs:
+      api_url:
+        description: "Your Render URL (no trailing slash)"
+        required: true
+        default: "https://reeldramafilm.onrender.com"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - name: Prepare web files for the app
+        run: |
+          rm -rf mobile/www && mkdir -p mobile/www
+          cp -r web/. mobile/www/
+          echo "window.VUTA_API = '${{ github.event.inputs.api_url }}';" > mobile/www/config.js
+      - name: Install Capacitor and create the Android project
+        working-directory: mobile
+        run: |
+          npm install
+          npx cap add android
+          npx cap sync android
+      - name: Build debug APK
+        working-directory: mobile/android
+        run: ./gradlew assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reeldrama-debug-apk
+          path: mobile/android/app/build/outputs/apk/debug/app-debug.apk
