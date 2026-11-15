@@ -402,7 +402,7 @@ const povSet = html => { const o = $('#pov'); if (o) o.innerHTML = html; };
 async function loadEpisode(ep) {
   const pv = $('#pv'), v = $('#vid'); if (!pv) return;
   saveProgress(true);
-  P.ep = ep; P.access = false; P.retries = 0; P.next = null; P.lastErr = '';
+  P.ep = ep; P.access = false; P.retries = 0; P.next = null; P.lastErr = ''; P.forceNative = false;
   pv.classList.add('loading'); $('#lsp').classList.remove('hide'); povSet('');
   v.pause(); if (P.hls) { P.hls.destroy(); P.hls = null; }
   v.removeAttribute('src'); v.load();
@@ -431,12 +431,18 @@ function attach(url, type, subs) {
   (subs || []).slice(0, 4).forEach((s, i) => { const t = document.createElement('track'); t.kind = 'subtitles'; t.src = s.url; t.label = s.label; t.srclang = s.lang; if (i === 0) t.default = true; v.appendChild(t); });
   const start = () => { const at = P.resumeAt || 0; P.resumeAt = 0; if (at > 2 && (!v.duration || at < v.duration - 3)) v.currentTime = at; v.play().catch(() => { $('#pv').classList.add('paused'); ready0(); }); };
   v.addEventListener('loadedmetadata', start, { once: true });
-  if (type === 'hls' && window.Hls && Hls.isSupported()) {
+  // Browsers that can play HLS themselves (Safari, Chrome on Android) load a plain <video src> without hls.js.
+  const nativeHls = type === 'hls' && !!v.canPlayType('application/vnd.apple.mpegurl');
+  if (type === 'hls' && window.Hls && Hls.isSupported() && !(nativeHls && P.forceNative)) {
     P.hls = new Hls({ maxBufferLength: 20, startLevel: -1, capLevelToPlayerSize: true, enableWorker: true });
     P.hls.on(Hls.Events.ERROR, (_e, d) => {
       if (!d.fatal) return;
       P.lastErr = `${d.type} / ${d.details}${d.response ? ' / HTTP ' + d.response.code : ''}`;
       console.error('[player] fatal HLS error', d);
+      if (nativeHls && !P.forceNative) { // hls.js could not fetch it: let the browser's own HLS player try once
+        P.forceNative = true; P.hls.destroy(); P.hls = null; console.info('[player] retrying with the browser\'s built-in HLS');
+        return attach(url, type, subs);
+      }
       refreshSource();
     });
     P.hls.loadSource(url); P.hls.attachMedia(v);
