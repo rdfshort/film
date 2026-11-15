@@ -28,6 +28,7 @@ router.get('/public-config', wrap(async (_req, res) => {
   res.json({
     supabaseUrl: config.supabaseUrl, supabaseAnonKey: config.supabaseAnon,
     siteName: s.site_name || 'VUTA', paymentMethods: s.payment_methods || {},
+    imageProxy: process.env.IMAGE_PROXY || '',
     storeBillingRequired: process.env.NATIVE_STORE_BILLING === 'true',
     freeEpisodes: s.free_episodes, packages: pk.data || [], plans: pl.data || [],
   });

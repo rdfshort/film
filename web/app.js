@@ -70,7 +70,10 @@ const netMsg = e => e.offline ? 'You appear to be offline. Check your connection
 document.addEventListener('load', e => { if (e.target.classList?.contains('pimg')) e.target.classList.add('ld'); }, true);
 document.addEventListener('error', e => { if (e.target.classList?.contains('pimg')) e.target.remove(); }, true);
 
-const cardHtml = (f, o = {}) => `<a class="card" href="${o.href || '#/film/' + encodeURIComponent(f.id)}"><div class="poster"><div class="ph">${esc((f.title || '?')[0])}</div>${f.poster_url ? `<img class="pimg" loading="lazy" decoding="async" referrerpolicy="no-referrer" alt="" src="${esc(f.poster_url)}">` : ''}${o.badge ? `<span class="badge ${o.badgeCls || ''}">${esc(o.badge)}</span>` : ''}${o.pct != null ? `<div class="prog"><i style="width:${o.pct}%"></i></div>` : ''}</div><div class="ct">${esc(f.title)}</div><div class="cs">${esc(o.sub !== undefined ? o.sub : f.episode_count ? f.episode_count + ' episodes' : '')}</div></a>`;
+let EAGER = 0; // first N posters on a screen load immediately, the rest lazily
+const imgSrc = (u, w) => { try { const p = S && S.cfg && S.cfg.imageProxy; return p ? p.replace('{url}', encodeURIComponent(u)).replace('{w}', w) : u; } catch { return u; } };
+const imgLoad = () => (EAGER > 0 ? (EAGER--, 'fetchpriority="high"') : 'loading="lazy"');
+const cardHtml = (f, o = {}) => `<a class="card" href="${o.href || '#/film/' + encodeURIComponent(f.id)}"><div class="poster"><div class="ph">${esc((f.title || '?')[0])}</div>${f.poster_url ? `<img class="pimg" ${imgLoad()} decoding="async" referrerpolicy="no-referrer" alt="" src="${esc(imgSrc(f.poster_url, 360))}">` : ''}${o.badge ? `<span class="badge ${o.badgeCls || ''}">${esc(o.badge)}</span>` : ''}${o.pct != null ? `<div class="prog"><i style="width:${o.pct}%"></i></div>` : ''}</div><div class="ct">${esc(f.title)}</div><div class="cs">${esc(o.sub !== undefined ? o.sub : f.episode_count ? f.episode_count + ' episodes' : '')}</div></a>`;
 const rowHtml = (title, films, o) => films?.length ? `<h2 class="sec">${esc(title)}</h2><div class="row">${films.map(f => cardHtml(f, o ? o(f) : {})).join('')}</div>` : '';
 
 function topBar(extra = '') {
@@ -209,20 +212,30 @@ function renderNav(tab) {
   $('#nav').innerHTML = items.map(([k, l, i]) => `<a href="#/${k}" class="${tab === k ? 'on' : ''}">${ic(i)}<span>${l}</span></a>`).join('');
 }
 
-async function vHome(t) {
-  $('#main').innerHTML = skeleton();
-  let d; try { d = await api('/home'); } catch (e) { if (t !== tok) return; return void ($('#main').innerHTML = topBar() + errView(netMsg(e))); }
-  if (t !== tok) return;
+const homeKey = () => 'vuta_home_' + ((S.me && (S.me.id || (S.me.profile && S.me.profile.id))) || 'anon');
+function paintHome(d) {
+  EAGER = 8;
   const hero = d.featured[0] || d.trending[0];
   const empty = !hero && !d.latest.length;
   $('#main').innerHTML = topBar(`<a class="ib" href="#/discover" aria-label="Search">${ic('search')}</a>`) +
     (empty ? `<div class="empty"><p>No dramas yet. The catalogue is loading — check back in a moment.</p><button class="btn sec" data-act="reload">Refresh</button></div>` : '') +
-    (hero ? `<a class="hero" href="#/film/${encodeURIComponent(hero.id)}">${hero.poster_url ? `<img class="pimg" referrerpolicy="no-referrer" alt="" src="${esc(hero.poster_url)}">` : ''}<div class="hc"><span class="badge" style="position:static">FEATURED</span><h1>${esc(hero.title)}</h1><div class="muted small">${esc((hero.genres || []).slice(0, 3).join(' · '))}</div></div></a>` : '') +
+    (hero ? `<a class="hero" href="#/film/${encodeURIComponent(hero.id)}">${hero.poster_url ? `<img class="pimg" fetchpriority="high" decoding="async" referrerpolicy="no-referrer" alt="" src="${esc(imgSrc(hero.poster_url, 720))}">` : ''}<div class="hc"><span class="badge" style="position:static">FEATURED</span><h1>${esc(hero.title)}</h1><div class="muted small">${esc((hero.genres || []).slice(0, 3).join(' · '))}</div></div></a>` : '') +
     (d.categories.length ? `<div class="chips" style="margin-top:14px">${d.categories.map(c => `<a class="chip" href="#/discover?genre=${encodeURIComponent(c)}">${esc(c)}</a>`).join('')}</div>` : '') +
     rowHtml('Continue watching', d.continueWatching, f => ({ href: `#/watch/${encodeURIComponent(f.id)}/${f.resume_ep}`, pct: f.duration_sec ? Math.min(100, Math.round(f.resume_pos / f.duration_sec * 100)) : 5, sub: 'Episode ' + f.resume_ep })) +
     rowHtml('Trending now', d.trending, (f) => ({ badge: f.featured ? 'HOT' : '' })) +
     d.collections.map(c => rowHtml(c.title, c.films, () => c.vip_only ? { badge: 'VIP', badgeCls: 'vip' } : {})).join('') +
     rowHtml('Latest releases', d.latest);
+}
+
+async function vHome(t) {
+  let cached = null;
+  try { cached = JSON.parse(localStorage.getItem(homeKey()) || 'null'); } catch {}
+  if (cached) paintHome(cached); else $('#main').innerHTML = skeleton();
+  let d; try { d = await api('/home'); } catch (e) { if (t !== tok || cached) return; return void ($('#main').innerHTML = topBar() + errView(netMsg(e))); }
+  if (t !== tok) return;
+  const fresh = JSON.stringify(d);
+  try { if (localStorage.getItem(homeKey()) === fresh) return; localStorage.setItem(homeKey(), fresh); } catch {}
+  paintHome(d);
 }
 
 async function vDiscover(t, q) {
@@ -320,7 +333,7 @@ async function vFilm(t, id) {
   if (t !== tok) return;
   const free = episodes.filter(e => e.free).length;
   $('#main').innerHTML = `<div class="top"><a class="ib" href="javascript:history.back()" data-act="back">${ic('back')}</a></div>
-    <div class="det"><div class="poster">${film.poster_url ? `<img class="pimg" referrerpolicy="no-referrer" alt="" src="${esc(film.poster_url)}">` : ''}</div>
+    <div class="det"><div class="poster">${film.poster_url ? `<img class="pimg" fetchpriority="high" decoding="async" referrerpolicy="no-referrer" alt="" src="${esc(imgSrc(film.poster_url, 480))}">` : ''}</div>
     <div style="flex:1;min-width:0"><h1>${esc(film.title)}</h1><div class="tags">${(film.genres || []).map(g => `<span class="tag">${esc(g)}</span>`).join('')}</div><div class="muted small">${episodes.length} episodes · first ${free} free</div></div></div>
     <p class="pad muted" style="margin:10px 0 14px;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden">${esc(film.description || 'No description available.')}</p>
     <div class="pad" style="display:flex;gap:10px"><a class="btn" style="flex:1" href="#/watch/${encodeURIComponent(id)}/${resume}">${ic('play')} ${resume > 1 ? 'Continue EP ' + resume : 'Watch now'}</a><button class="btn sec" data-act="mylist" data-id="${esc(id)}">${ic(d.inList ? 'check' : 'plus')} My List</button></div>
