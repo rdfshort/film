@@ -367,4 +367,10 @@ async function ensureFilm(id, maxAgeMs = 6 * 3600_000) {
   }
 }
 
-module.exports = { cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, searchAll, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };
+// Fire-and-forget: put a drama's episode list (which carries the stream links) in cache before the viewer taps play.
+function warmEpisodes(fullId, platform) {
+  if (cfg.paths.play) return;
+  try { const sp = splitId(fullId, platform); if (sp.platform) episodesRaw(sp.platform, sp.code).catch(() => {}); } catch { /* ignore */ }
+}
+
+module.exports = { warmEpisodes, cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, searchAll, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };

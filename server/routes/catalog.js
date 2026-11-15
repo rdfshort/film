@@ -97,6 +97,7 @@ router.get('/films/:id', wrap(async (req, res) => {
   const ok = await syln.ensureFilm(id);
   const { data: film } = await db.from('films').select('*').eq('id', id).eq('hidden', false).maybeSingle();
   if (!ok || !film) return res.status(404).json({ error: 'not_found' });
+  syln.warmEpisodes(id, film.platform);
   const { data: eps } = await db.from('episodes').select('ep_no,title,duration_sec,is_free,coin_price').eq('film_id', id).eq('hidden', false).order('ep_no');
   const episodes = await annotateEpisodes(req.user, film, eps || []);
   db.from('films').update({ views: (film.views || 0) + 1 }).eq('id', id).then(() => {}, () => {});

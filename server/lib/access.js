@@ -49,4 +49,14 @@ async function annotateEpisodes(user, film, eps) {
   });
 }
 
-module.exports = { authorize, annotateEpisodes, policyFor };
+// Offline downloads are for admins and active VIP Monthly subscribers. Returns until = when the offline copy stops playing.
+async function downloadRights(user) {
+  if (!user) return { ok: false };
+  if (user.role === 'admin') return { ok: true, until: new Date(Date.now() + 30 * 864e5).toISOString() };
+  const { data } = await db.from('subscriptions').select('expires_at, vip_plans!inner(code)')
+    .eq('user_id', user.id).eq('status', 'active').gt('expires_at', new Date().toISOString()).eq('vip_plans.code', 'monthly')
+    .order('expires_at', { ascending: false }).limit(1);
+  return data && data.length ? { ok: true, until: data[0].expires_at } : { ok: false };
+}
+
+module.exports = { downloadRights, authorize, annotateEpisodes, policyFor };

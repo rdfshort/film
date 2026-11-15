@@ -2,7 +2,7 @@ const router = require('express').Router();
 const { db, wrap, clampInt, safeId } = require('../lib/core');
 const { requireAuth } = require('../lib/auth');
 const syln = require('../lib/syln');
-const { authorize } = require('../lib/access');
+const { authorize, downloadRights } = require('../lib/access');
 
 router.use(requireAuth);
 
@@ -26,16 +26,23 @@ router.post('/play', wrap(async (req, res) => {
     const { data: w } = await db.from('wallets').select('balance').eq('user_id', req.user.id).maybeSingle();
     return res.status(402).json({ error: a.reason, locked: true, price: a.price, vipOnly: a.vipOnly, balance: w?.balance || 0 });
   }
+  let dl = null;
+  if (req.body.download) {
+    dl = await downloadRights(req.user);
+    if (!dl.ok) return res.status(403).json({ error: 'download_vip', message: 'Downloads are for VIP Monthly members.' });
+  }
   try {
-    const p = await syln.getPlayback(filmId, { no: ep, id: episode.provider_episode_id }, film.platform);
-    const { data: next } = await db.from('episodes').select('ep_no').eq('film_id', filmId).eq('hidden', false).gt('ep_no', ep).order('ep_no').limit(1);
-    const { data: hist } = await db.from('watch_history').select('position_sec').eq('user_id', req.user.id).eq('film_id', filmId).eq('ep_no', ep).maybeSingle();
+    const [p, { data: next }, { data: hist }] = await Promise.all([
+      syln.getPlayback(filmId, { no: ep, id: episode.provider_episode_id }, film.platform),
+      db.from('episodes').select('ep_no').eq('film_id', filmId).eq('hidden', false).gt('ep_no', ep).order('ep_no').limit(1),
+      db.from('watch_history').select('position_sec').eq('user_id', req.user.id).eq('film_id', filmId).eq('ep_no', ep).maybeSingle(),
+    ]);
     res.set('Cache-Control', 'no-store');
     res.json({
       url: p.url, type: /\.m3u8(\?|$)/i.test(p.url) ? 'hls' : 'file',
       subtitles: p.subtitles?.length ? p.subtitles : (episode.subtitles || []).filter(s => s.url).map(s => ({ lang: s.lang || 'en', label: s.label || 'Subtitles', url: s.url })),
       expiresIn: p.expires_in, nextEp: next?.[0]?.ep_no || null, resumeAt: hist?.position_sec || 0,
-      access: a.reason, title: episode.title, filmTitle: film.title,
+      access: a.reason, downloadUntil: dl ? dl.until : undefined, title: episode.title, filmTitle: film.title,
     });
   } catch (e) {
     const code = e.code || 'upstream_error';

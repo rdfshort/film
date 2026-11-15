@@ -27,6 +27,7 @@ const IC = {
   search: '<circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   check: '<path d="M5 12l5 5 9-10"/>',
+  download: '<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>',
 };
 const ic = n => `<svg class="i" viewBox="0 0 24 24">${IC[n]}</svg>`;
 
@@ -67,13 +68,19 @@ const skeleton = () => `<div class="top"><span class="brand">VUTA</span></div><d
 const errView = (msg, retry = true) => `<div class="empty"><p>${esc(msg)}</p>${retry ? '<button class="btn sec" data-act="reload">Try again</button>' : ''}</div>`;
 const netMsg = e => e.offline ? 'You appear to be offline. Check your connection.' : 'Could not load this right now. Please try again.';
 
-document.addEventListener('load', e => { if (e.target.classList?.contains('pimg')) e.target.classList.add('ld'); }, true);
+document.addEventListener('error', e => { // a poster failed: try the original address once, then once more shortly after
+  const t = e.target; if (!t || !t.classList || !t.classList.contains('pimg')) return;
+  const o = t.getAttribute('data-o'); const n = +(t.dataset.n || 0);
+  if (n >= 2 || !o) { t.style.visibility = 'hidden'; return; }
+  t.dataset.n = n + 1;
+  if (n === 0 && t.getAttribute('src') !== o) t.src = o; else setTimeout(() => { t.src = o + (o.includes('?') ? '&' : '?') + 'r=' + Date.now(); }, 1500);
+}, true);
 document.addEventListener('error', e => { if (e.target.classList?.contains('pimg')) e.target.remove(); }, true);
 
 let EAGER = 0; // first N posters on a screen load immediately, the rest lazily
 const imgSrc = (u, w) => { try { const p = S && S.cfg && S.cfg.imageProxy; return p ? p.replace('{url}', encodeURIComponent(u)).replace('{w}', w) : u; } catch { return u; } };
 const imgLoad = () => (EAGER > 0 ? (EAGER--, 'fetchpriority="high"') : 'loading="lazy"');
-const cardHtml = (f, o = {}) => `<a class="card" href="${o.href || '#/film/' + encodeURIComponent(f.id)}"><div class="poster"><div class="ph">${esc((f.title || '?')[0])}</div>${f.poster_url ? `<img class="pimg" ${imgLoad()} decoding="async" referrerpolicy="no-referrer" alt="" src="${esc(imgSrc(f.poster_url, 360))}">` : ''}${o.badge ? `<span class="badge ${o.badgeCls || ''}">${esc(o.badge)}</span>` : ''}${o.pct != null ? `<div class="prog"><i style="width:${o.pct}%"></i></div>` : ''}</div><div class="ct">${esc(f.title)}</div><div class="cs">${esc(o.sub !== undefined ? o.sub : f.episode_count ? f.episode_count + ' episodes' : '')}</div></a>`;
+const cardHtml = (f, o = {}) => `<a class="card" href="${o.href || '#/film/' + encodeURIComponent(f.id)}"><div class="poster"><div class="ph">${esc((f.title || '?')[0])}</div>${f.poster_url ? `<img class="pimg" ${imgLoad()} decoding="async" referrerpolicy="no-referrer" alt="" data-o="${esc(f.poster_url)}" src="${esc(imgSrc(f.poster_url, 360))}">` : ''}${o.badge ? `<span class="badge ${o.badgeCls || ''}">${esc(o.badge)}</span>` : ''}${o.pct != null ? `<div class="prog"><i style="width:${o.pct}%"></i></div>` : ''}</div><div class="ct">${esc(f.title)}</div><div class="cs">${esc(o.sub !== undefined ? o.sub : f.episode_count ? f.episode_count + ' episodes' : '')}</div></a>`;
 const rowHtml = (title, films, o) => films?.length ? `<h2 class="sec">${esc(title)}</h2><div class="row">${films.map(f => cardHtml(f, o ? o(f) : {})).join('')}</div>` : '';
 
 function topBar(extra = '') {
@@ -81,7 +88,7 @@ function topBar(extra = '') {
   const right = S.session
     ? `<a class="coinpill" href="#/wallet">${ic('coin')}<span id="pillbal">${m ? Number(m.balance).toLocaleString() : '…'}</span></a>`
     : `<button class="btn sm" data-act="login">Log in</button>`;
-  return `<div class="top"><span class="brand">${esc(S.cfg.siteName || 'VUTA')}</span><span class="sp"></span>${extra}${right}</div>`;
+  return `<div class="top"><span class="brand"><img class="logo" src="icons/favicon.png" alt="" width="26" height="26">${esc(S.cfg.siteName || 'VUTA')}</span><span class="sp"></span>${extra}${right}</div>`;
 }
 function needLogin(msg) {
   $('#main').innerHTML = topBar() + `<div class="empty"><p>${esc(msg)}</p><button class="btn" data-act="login">Log in or sign up</button></div>`;
@@ -212,14 +219,14 @@ function renderNav(tab) {
   $('#nav').innerHTML = items.map(([k, l, i]) => `<a href="#/${k}" class="${tab === k ? 'on' : ''}">${ic(i)}<span>${l}</span></a>`).join('');
 }
 
-const homeKey = () => 'vuta_home_' + ((S.me && (S.me.id || (S.me.profile && S.me.profile.id))) || 'anon');
+const homeKey = () => 'vuta_home_' + ((S.session && S.session.user && S.session.user.id) || 'anon');
 function paintHome(d) {
   EAGER = 8;
   const hero = d.featured[0] || d.trending[0];
   const empty = !hero && !d.latest.length;
   $('#main').innerHTML = topBar(`<a class="ib" href="#/discover" aria-label="Search">${ic('search')}</a>`) +
     (empty ? `<div class="empty"><p>No dramas yet. The catalogue is loading — check back in a moment.</p><button class="btn sec" data-act="reload">Refresh</button></div>` : '') +
-    (hero ? `<a class="hero" href="#/film/${encodeURIComponent(hero.id)}">${hero.poster_url ? `<img class="pimg" fetchpriority="high" decoding="async" referrerpolicy="no-referrer" alt="" src="${esc(imgSrc(hero.poster_url, 720))}">` : ''}<div class="hc"><span class="badge" style="position:static">FEATURED</span><h1>${esc(hero.title)}</h1><div class="muted small">${esc((hero.genres || []).slice(0, 3).join(' · '))}</div></div></a>` : '') +
+    (hero ? `<a class="hero" href="#/film/${encodeURIComponent(hero.id)}">${hero.poster_url ? `<img class="pimg" fetchpriority="high" decoding="async" referrerpolicy="no-referrer" alt="" data-o="${esc(hero.poster_url)}" src="${esc(imgSrc(hero.poster_url, 720))}">` : ''}<div class="hc"><span class="badge" style="position:static">FEATURED</span><h1>${esc(hero.title)}</h1><div class="muted small">${esc((hero.genres || []).slice(0, 3).join(' · '))}</div></div></a>` : '') +
     (d.categories.length ? `<div class="chips" style="margin-top:14px">${d.categories.map(c => `<a class="chip" href="#/discover?genre=${encodeURIComponent(c)}">${esc(c)}</a>`).join('')}</div>` : '') +
     rowHtml('Continue watching', d.continueWatching, f => ({ href: `#/watch/${encodeURIComponent(f.id)}/${f.resume_ep}`, pct: f.duration_sec ? Math.min(100, Math.round(f.resume_pos / f.duration_sec * 100)) : 5, sub: 'Episode ' + f.resume_ep })) +
     rowHtml('Trending now', d.trending, (f) => ({ badge: f.featured ? 'HOT' : '' })) +
@@ -268,11 +275,13 @@ async function vDiscover(t, q) {
 async function vLibrary(t, q) {
   if (!S.session) return needLogin('Log in to see your watch history, saved dramas and unlocked episodes.');
   const tab = q.tab || 'continue';
-  $('#main').innerHTML = topBar() + `<div class="tabs">${[['continue', 'Continue'], ['list', 'My List'], ['unlocked', 'Unlocked']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="lib"><div class="center"><div class="spin"></div></div></div>`;
+  $('#main').innerHTML = topBar() + `<div class="tabs">${[['continue', 'Continue'], ['list', 'My List'], ['unlocked', 'Unlocked']].concat(FSP() ? [['downloads', 'Downloads']] : []).map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div id="lib"><div class="center"><div class="spin"></div></div></div>`;
   $('#main').querySelector('.tabs').addEventListener('click', e => { const b = e.target.closest('[data-tab]'); if (b) location.hash = '#/library?tab=' + b.dataset.tab; });
   try {
     let html = '';
-    if (tab === 'continue') {
+    if (tab === 'downloads') {
+      html = dlHtml();
+    } else if (tab === 'continue') {
       const d = await api('/me/history');
       html = d.items.length ? `<div class="grid">${d.items.map(f => cardHtml(f, { href: `#/watch/${encodeURIComponent(f.id)}/${f.resume_ep}`, sub: 'Episode ' + f.resume_ep })).join('')}</div>` : `<div class="empty"><p>Nothing watched yet.</p><a class="btn" href="#/discover">Find a drama</a></div>`;
     } else if (tab === 'list') {
@@ -282,7 +291,10 @@ async function vLibrary(t, q) {
       const d = await api('/me/unlocks');
       html = d.items.length ? `<div class="box">${d.items.map(u => `<a class="li" href="#/watch/${encodeURIComponent(u.film_id)}/${u.ep_no}"><span style="flex:1">${esc(u.films?.title || u.film_id)}<div class="muted small">Episode ${u.ep_no} · ${fmtDate(u.created_at)}</div></span><span class="muted small">${u.price} coins</span></a>`).join('')}</div>` : `<div class="empty"><p>Episodes you unlock with coins appear here and stay yours forever.</p></div>`;
     }
-    if (t === tok) $('#lib').innerHTML = html;
+    if (t === tok) {
+      $('#lib').innerHTML = html;
+      if (tab === 'downloads') $('#lib').onclick = async e => { const b = e.target.closest('[data-dldel]'); if (!b) return; const [id, ep] = b.dataset.dldel.split('|'); const d = dlGet(id, +ep); if (d) { await dlRemove(d); $('#lib').innerHTML = dlHtml(); toast('Removed'); } };
+    }
   } catch (e) { if (t === tok) $('#lib').innerHTML = errView(netMsg(e)); }
 }
 
@@ -333,7 +345,7 @@ async function vFilm(t, id) {
   if (t !== tok) return;
   const free = episodes.filter(e => e.free).length;
   $('#main').innerHTML = `<div class="top"><a class="ib" href="javascript:history.back()" data-act="back">${ic('back')}</a></div>
-    <div class="det"><div class="poster">${film.poster_url ? `<img class="pimg" fetchpriority="high" decoding="async" referrerpolicy="no-referrer" alt="" src="${esc(imgSrc(film.poster_url, 480))}">` : ''}</div>
+    <div class="det"><div class="poster">${film.poster_url ? `<img class="pimg" fetchpriority="high" decoding="async" referrerpolicy="no-referrer" alt="" data-o="${esc(film.poster_url)}" src="${esc(imgSrc(film.poster_url, 480))}">` : ''}</div>
     <div style="flex:1;min-width:0"><h1>${esc(film.title)}</h1><div class="tags">${(film.genres || []).map(g => `<span class="tag">${esc(g)}</span>`).join('')}</div><div class="muted small">${episodes.length} episodes · first ${free} free</div></div></div>
     <p class="pad muted" style="margin:10px 0 14px;display:-webkit-box;-webkit-line-clamp:6;-webkit-box-orient:vertical;overflow:hidden">${esc(film.description || 'No description available.')}</p>
     <div class="pad" style="display:flex;gap:10px"><a class="btn" style="flex:1" href="#/watch/${encodeURIComponent(id)}/${resume}">${ic('play')} ${resume > 1 ? 'Continue EP ' + resume : 'Watch now'}</a><button class="btn sec" data-act="mylist" data-id="${esc(id)}">${ic(d.inList ? 'check' : 'plus')} My List</button></div>
@@ -367,12 +379,13 @@ async function openPlayer(id, ep) {
   if (!S.session) { location.hash = '#/film/' + encodeURIComponent(id); return authModal('login'); }
   if (P.open && P.id === id) return loadEpisode(ep);
   closePlayer(true);
-  if (!S.film[id]) { try { S.film[id] = await api('/films/' + encodeURIComponent(id)); } catch (e) { toast(e.status === 404 ? 'Drama not available' : netMsg(e)); location.hash = '#/home'; return; } }
-  P.open = true; P.id = id; P.film = S.film[id].film; P.eps = S.film[id].episodes; P.access = false;
+  let fd = S.film[id];
+  if (!fd) { try { fd = S.film[id] = await api('/films/' + encodeURIComponent(id)); } catch (e) { fd = dlOfflineFilm(id); if (!fd) { toast(e.status === 404 ? 'Drama not available' : netMsg(e)); location.hash = '#/home'; return; } } }
+  P.open = true; P.id = id; P.film = fd.film; P.eps = fd.episodes; P.access = false;
   const el = document.createElement('div'); el.id = 'player';
   el.innerHTML = `<div class="pv paused loading" id="pv"><video id="vid" playsinline webkit-playsinline preload="auto"></video>
     <div class="cen"><div class="big">${ic('play')}</div><div class="spin" id="lsp"></div></div>
-    <div class="pt"><button class="ib" data-p="close" aria-label="Close">${ic('back')}</button><div class="ti"><b id="ptt"></b><span id="pts"></span></div><button class="ib hide" data-p="cc" id="ccb" aria-label="Subtitles">${ic('cc')}</button><button class="ib" data-p="eps" aria-label="Episodes">${ic('list')}</button></div>
+    <div class="pt"><button class="ib" data-p="close" aria-label="Close">${ic('back')}</button><div class="ti"><b id="ptt"></b><span id="pts"></span></div><button class="ib hide" data-p="cc" id="ccb" aria-label="Subtitles">${ic('cc')}</button><button class="ib dlb" data-p="dl" id="dlb" aria-label="Download"><em>VIP</em>${ic('download')}</button><button class="ib" data-p="eps" aria-label="Episodes">${ic('list')}</button></div>
     <div class="pb"><div class="bar" id="bar"><i><u id="bu"></u><s id="bs"></s></i></div><div class="pc"><button class="ib" data-p="pp" id="ppb" aria-label="Play or pause">${ic('play')}</button><span id="tm">0:00 / 0:00</span><span class="sp"></span><button class="ib" data-p="fs" aria-label="Full screen">${ic('full')}</button></div></div>
     <div id="pov"></div></div>`;
   $('#layer').appendChild(el);
@@ -393,6 +406,7 @@ function wirePlayer() {
     if (a === 'close') closePlayer(); else if (a === 'pp') toggle();
     else if (a === 'fs') { if (document.fullscreenElement) document.exitFullscreen(); else (pv.requestFullscreen || pv.webkitRequestFullscreen || (() => v.webkitEnterFullscreen?.())).call(pv); }
     else if (a === 'eps') epSheet();
+    else if (a === 'dl') downloadEpisode();
     else if (a === 'cc') { const tr = v.textTracks[0]; if (tr) { tr.mode = tr.mode === 'showing' ? 'hidden' : 'showing'; toast(tr.mode === 'showing' ? 'Subtitles on' : 'Subtitles off'); } }
   });
   v.addEventListener('play', () => { pv.classList.remove('paused'); $('#ppb').innerHTML = ic('pause'); idle(); });
@@ -428,6 +442,15 @@ async function loadEpisode(ep) {
   v.removeAttribute('src'); v.load();
   $('#ptt').textContent = P.film.title; $('#pts').textContent = 'Episode ' + ep;
   history.replaceState(null, '', `#/watch/${encodeURIComponent(P.id)}/${ep}`);
+  const dl = dlGet(P.id, ep);
+  if (dl) { // a saved copy plays first: no data, instant start
+    if (dlExpired(dl)) {
+      if (navigator.onLine === false) { ready0(); return povSet(`<div class="lock"><h3>Download expired</h3><p class="muted">Renew your VIP Monthly to keep watching offline.</p><button class="btn sec" data-pv="back">Back</button></div>`); }
+      dlRemove(dl).catch(() => {});
+    } else {
+      try { const url = await dlUrl(dl); if (P.ep !== ep || !P.open) return; P.access = true; P.next = nextEpOf(ep); P.resumeAt = 0; return attach(url, dl.type, []); } catch { /* fall through to streaming */ }
+    }
+  }
   try {
     const d = await api('/play', { method: 'POST', body: { filmId: P.id, ep } });
     if (P.ep !== ep || !P.open) return;
@@ -566,10 +589,99 @@ function route() {
   return vHome(t);
 }
 
+/* ───────── offline downloads (Android app only; saved in the app's private storage on the phone) ───────── */
+const FSP = () => NATIVE && window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Filesystem;
+const dlStoreKey = () => 'vuta_dl_' + ((S.session && S.session.user && S.session.user.id) || 'x');
+const dlAll = () => { try { return JSON.parse(localStorage.getItem(dlStoreKey()) || '[]'); } catch { return []; } };
+const dlWrite = l => { try { localStorage.setItem(dlStoreKey(), JSON.stringify(l)); } catch {} };
+const dlGet = (id, ep) => dlAll().find(x => x.id === id && x.ep === ep);
+const dlExpired = d => !d.until || new Date(d.until).getTime() < Date.now();
+const dlSafe = x => String(x).replace(/[^a-z0-9_-]/gi, '_');
+const nextEpOf = ep => (P.eps || []).map(e => e.ep_no).filter(n => n > ep).sort((a, b) => a - b)[0] || null;
+async function dlUrl(d) {
+  const { uri } = await FSP().getUri({ path: d.dir + '/' + d.file, directory: 'DATA' });
+  return window.Capacitor.convertFileSrc(uri);
+}
+async function dlRemove(d) {
+  try { await FSP().rmdir({ path: d.dir, directory: 'DATA', recursive: true }); } catch {}
+  dlWrite(dlAll().filter(x => !(x.id === d.id && x.ep === d.ep)));
+}
+function dlOfflineFilm(id) {
+  const items = dlAll().filter(x => x.id === id && !dlExpired(x)); if (!items.length) return null;
+  return { film: { id, title: items[0].filmTitle, poster_url: items[0].poster }, episodes: items.map(i => ({ ep_no: i.ep, title: i.title || 'Episode ' + i.ep, is_free: true })).sort((a, b) => a.ep_no - b.ep_no), inList: false };
+}
+async function pool(jobs, n, fn) { let i = 0; await Promise.all(Array.from({ length: n }, async () => { while (i < jobs.length) { const j = jobs[i++]; await fn(j); } })); }
+const dlText = async u => { const r = await fetch(u); if (!r.ok) throw new Error('HTTP ' + r.status); return r.text(); };
+
+// Downloads an HLS stream into dir/index.m3u8 + numbered pieces; returns the playlist file name.
+async function dlHls(url, dir, onPct) {
+  const F = FSP();
+  let txt = await dlText(url), base = url;
+  if (/#EXT-X-STREAM-INF/.test(txt)) { // master playlist: take the best quality variant
+    const L = txt.split(/\r?\n/); let best = null, bw = -1;
+    for (let i = 0; i < L.length; i++) { const m = /BANDWIDTH=(\d+)/.exec(L[i]); if (L[i].startsWith('#EXT-X-STREAM-INF') && L[i + 1] && !L[i + 1].startsWith('#')) { const b = m ? +m[1] : 0; if (b > bw) { bw = b; best = L[i + 1].trim(); } } }
+    base = new URL(best, url).href; txt = await dlText(base);
+  }
+  const jobs = [], out = []; let n = 0;
+  const local = (abs) => { const ext = (new URL(abs).pathname.match(/\.[a-z0-9]{1,5}$/i) || ['.bin'])[0]; const name = 'p' + (n++) + ext; jobs.push({ url: abs, name }); return name; };
+  for (const line of txt.split(/\r?\n/)) {
+    if (/^#EXT-X-(KEY|MAP)/.test(line) && /URI="([^"]+)"/.test(line)) out.push(line.replace(/URI="([^"]+)"/, (_m, u) => 'URI="' + local(new URL(u, base).href) + '"'));
+    else if (line && !line.startsWith('#')) out.push(local(new URL(line.trim(), base).href));
+    else out.push(line);
+  }
+  if (!jobs.length) throw new Error('empty playlist');
+  let done = 0;
+  await pool(jobs, 4, async j => {
+    for (let a = 0; ; a++) { try { await F.downloadFile({ url: j.url, path: dir + '/' + j.name, directory: 'DATA', recursive: true }); break; } catch (e) { if (a >= 2) throw e; } }
+    onPct(Math.round(++done / jobs.length * 100));
+  });
+  await F.writeFile({ path: dir + '/index.m3u8', data: out.join('\n'), directory: 'DATA', encoding: 'utf8', recursive: true });
+  return 'index.m3u8';
+}
+
+const DLB = { busy: false };
+async function downloadEpisode() {
+  if (!FSP()) return modal(`<h3>Download in the app</h3><p class="muted">Saving episodes to your phone works in the Android app.</p><a class="btn block" href="download.html">Get the app</a>`);
+  if (!P.open || !P.ep) return;
+  const id = P.id, ep = P.ep;
+  if (dlGet(id, ep)) return toast('Already saved on this phone');
+  if (DLB.busy) return toast('A download is already running');
+  let d;
+  try { d = await api('/play', { method: 'POST', body: { filmId: id, ep, download: true } }); }
+  catch (e) {
+    if (e.status === 403) return modal(`<h3>VIP Monthly feature</h3><p class="muted">Downloads are for VIP Monthly members.</p><button class="btn gold block" data-act="vip">${ic('crown')} Go VIP</button>`);
+    if (e.status === 402) return toast('Unlock this episode first');
+    return toast((e.data && e.data.message) || netMsg(e));
+  }
+  DLB.busy = true;
+  const setPct = p => { const x = $('#dlb em'); if (x) { x.textContent = p + '%'; x.style.color = '#fff'; } };
+  toast('Downloading…'); setPct(0);
+  const dir = 'downloads/' + dlSafe(id) + '/' + ep;
+  try {
+    let file;
+    if (d.type === 'hls') file = await dlHls(d.url, dir, setPct);
+    else { file = 'video.mp4'; await FSP().downloadFile({ url: d.url, path: dir + '/' + file, directory: 'DATA', recursive: true }); }
+    const rec = { id, ep, dir, file, type: d.type === 'hls' ? 'hls' : 'file', until: d.downloadUntil, title: 'Episode ' + ep, filmTitle: P.film.title, poster: P.film.poster_url || '', at: Date.now() };
+    dlWrite(dlAll().filter(x => !(x.id === id && x.ep === ep)).concat(rec));
+    toast('Saved to your phone ✓');
+  } catch (e) {
+    try { await FSP().rmdir({ path: dir, directory: 'DATA', recursive: true }); } catch {}
+    toast('Download failed. Check your connection and try again.');
+  } finally {
+    DLB.busy = false; const x = $('#dlb em'); if (x) { x.textContent = 'VIP'; x.style.color = ''; }
+  }
+}
+
+function dlHtml() {
+  const l = dlAll().sort((a, b) => b.at - a.at);
+  if (!l.length) return `<div class="empty"><p>No downloads yet. Open an episode and tap the download button.</p></div>`;
+  return `<div class="box">${l.map(u => `<div class="li"><a href="#/watch/${encodeURIComponent(u.id)}/${u.ep}" style="flex:1;color:inherit;text-decoration:none">${esc(u.filmTitle)}<div class="muted small">Episode ${u.ep}${dlExpired(u) ? ' · expired' : ''}</div></a><button class="btn sm sec" data-dldel="${esc(u.id)}|${u.ep}">Remove</button></div>`).join('')}</div>`;
+}
+
 /* ───────── boot ───────── */
 async function boot() {
-  try { S.cfg = await api('/public-config', { auth: false }); }
-  catch (e) { $('#main').innerHTML = errView(netMsg(e)); return; }
+  try { S.cfg = await api('/public-config', { auth: false }); try { localStorage.setItem('vuta_cfg', JSON.stringify(S.cfg)); } catch {} }
+  catch (e) { try { S.cfg = JSON.parse(localStorage.getItem('vuta_cfg') || 'null'); } catch {} if (!S.cfg) { $('#main').innerHTML = errView(netMsg(e)); return; } }
   document.title = (S.cfg.siteName || 'VUTA') + ' – Short Dramas';
   S.sb = supabase.createClient(S.cfg.supabaseUrl, S.cfg.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
   const { data } = await S.sb.auth.getSession(); S.session = data.session;
@@ -578,8 +690,9 @@ async function boot() {
     if (ev === 'PASSWORD_RECOVERY') return newPasswordModal();
     if (ev === 'SIGNED_IN' && !was || ev === 'SIGNED_OUT') { S.film = {}; await refreshMe(); route(); }
   });
-  await refreshMe();
+  try { await refreshMe(); } catch {}
   window.addEventListener('hashchange', route);
+  if (navigator.onLine === false && FSP() && !location.hash) location.hash = '#/library?tab=downloads';
   window.addEventListener('offline', () => toast('You are offline'));
   window.addEventListener('online', () => toast('Back online'));
   const pay = new URLSearchParams(location.search).get('pay') || new URLSearchParams(location.search).get('reference');
