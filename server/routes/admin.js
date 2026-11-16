@@ -170,6 +170,7 @@ router.patch('/users/:id', wrap(async (req, res) => {
   res.json({ ok: true });
 }));
 router.get('/posters', wrap(async (_req, res) => res.json(await syln.posterReport())));
+router.post('/posters/refresh', wrap(async (req, res) => res.json(await syln.refreshPosters(clampInt(req.body.n, 1, 60, 20)))));
 router.post('/posters/fix', wrap(async (_req, res) => res.json(await syln.fixPosters())));
 
 router.post('/users/:id/coins', wrap(async (req, res) => {

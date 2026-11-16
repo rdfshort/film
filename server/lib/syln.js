@@ -262,7 +262,11 @@ async function getFilm(fullId, platform) {
 }
 // One cached provider call feeds both the episode list and playback (the list carries the stream links).
 // Held in memory only, never stored in the database and never sent to browsers except per authorised episode.
-const episodesRaw = (platform, id) => cachedFresh(`syln:eps-raw:${platform}:${id}`, 30 * 60_000, async () => toList(await call(fill(cfg.paths.episodes, { platform, id }))));
+const episodesRaw = (platform, id) => cachedFresh(`syln:eps-raw:${platform}:${id}`, 30 * 60_000, async () => {
+  const list = toList(await call(fill(cfg.paths.episodes, { platform, id })));
+  adoptCover(platform, id, list); // the episode data carries a fresh cover link: save it permanently
+  return list;
+});
 async function getEpisodes(fullId, platform) {
   const sp = splitId(fullId, platform); platform = sp.platform || await defaultPlatform(); const id = sp.code;
   return (await episodesRaw(platform, id)).map(normEpisode).sort((a, b) => a.ep_no - b.ep_no);
@@ -312,6 +316,7 @@ const isMirrored = u => !!u && String(u).startsWith(MIRROR);
 const posterExpiry = u => { const m = /auth_key=(\d+)-/.exec(String(u || '')); return m ? Number(m[1]) * 1000 : 0; };
 const posterDead = u => { const e = posterExpiry(u); return !!e && e < Date.now() + 30_000; };
 let bucketReady = false, lastMirrorError = '';
+const mirrorStats = { adopted: 0 };
 async function ensureBucket() {
   if (bucketReady) return;
   const { error } = await db.storage.createBucket('posters', { public: true });
@@ -345,13 +350,43 @@ async function mirrorMany(films, n = 5) {
   }));
   return { ok, bad };
 }
+
+// A drama's episode list carries a fresh signed cover link. If we don't have a permanent copy yet, make one.
+async function adoptCover(platform, code, list) {
+  try {
+    const first = list && list[0]; const cover = first && (first.cover || first.poster || first.image);
+    if (!cover) return;
+    const id = `${platform}:${code}`;
+    const { data: row } = await db.from('films').select('id,poster_url').eq('id', id).maybeSingle();
+    if (!row || isMirrored(row.poster_url)) return;
+    const url = await mirrorOne({ id, poster_url: cover });
+    await db.from('films').update({ poster_url: url }).eq('id', id);
+    mirrorStats.adopted++;
+  } catch (e) { lastMirrorError = 'adopt: ' + e.message; }
+}
+// Refresh the covers of the most-watched dramas that have none or an expired one. Costs one API request each.
+async function refreshPosters(n = 20) {
+  const { data } = await db.from('films').select('id,poster_url,views').eq('hidden', false).order('views', { ascending: false }).limit(3000);
+  const todo = (data || []).filter(f => !isMirrored(f.poster_url)).slice(0, Math.max(1, Math.min(60, n)));
+  let tried = 0, failed = 0, firstErr = '';
+  for (const f of todo) {
+    const sp = splitId(f.id);
+    try { tried++; await episodesRaw(sp.platform, sp.code); }
+    catch (e) { failed++; firstErr = firstErr || e.message; if (/budget|limit/i.test(e.message)) break; }
+  }
+  await new Promise(r => setTimeout(r, 800)); // let the background copies finish
+  return { tried, failed, firstErr, ...(await posterReport()) };
+}
 async function posterReport() {
   const { data } = await db.from('films').select('poster_url').limit(5000);
-  const r = { total: 0, mirrored: 0, live: 0, expired: 0, none: 0, lastError: lastMirrorError };
+  const r = { total: 0, mirrored: 0, live: 0, expired: 0, none: 0, lastError: lastMirrorError, adopted: mirrorStats.adopted, newest: '' };
+  let best = 0;
   for (const f of data || []) {
     r.total++;
     if (!f.poster_url) r.none++; else if (isMirrored(f.poster_url)) r.mirrored++; else if (posterDead(f.poster_url)) r.expired++; else r.live++;
+    const e = posterExpiry(f.poster_url); if (e > best) best = e;
   }
+  if (best) r.newest = new Date(best).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';
   return r;
 }
 // Copy every cover whose link is still valid into permanent storage.
@@ -441,4 +476,4 @@ function warmEpisodes(fullId, platform) {
   try { const sp = splitId(fullId, platform); if (sp.platform) episodesRaw(sp.platform, sp.code).catch(() => {}); } catch { /* ignore */ }
 }
 
-module.exports = { posterReport, fixPosters, warmEpisodes, cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, searchAll, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };
+module.exports = { refreshPosters, posterReport, fixPosters, warmEpisodes, cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, searchAll, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };

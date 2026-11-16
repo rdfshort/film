@@ -42,7 +42,7 @@ async function overview(v) {
 /* ── catalogue ── */
 async function films(v, page = 1, q = '') {
   const d = await api(`/films?page=${page}&q=${encodeURIComponent(q)}`);
-  v.innerHTML = `<div class="box" style="margin:0 0 12px"><div class="frm"><div><label class="small muted">Search</label><input id="fq" value="${esc(q)}" placeholder="Title…"></div><button class="btn sm sec" id="fs">Search</button><button class="btn sm" id="sync">Sync from Syln</button><button class="btn sm sec" id="deep">Deep sync (10 pages)</button><button class="btn sm sec" id="fixp">Fix posters</button></div><p class="small muted" style="margin:8px 0 0">Titles are third-party content provided through the Syln API. Hide anything unavailable or that you are not licensed to show.</p></div>
+  v.innerHTML = `<div class="box" style="margin:0 0 12px"><div class="frm"><div><label class="small muted">Search</label><input id="fq" value="${esc(q)}" placeholder="Title…"></div><button class="btn sm sec" id="fs">Search</button><button class="btn sm" id="sync">Sync from Syln</button><button class="btn sm sec" id="deep">Deep sync (10 pages)</button><button class="btn sm sec" id="fixp">Fix posters</button><button class="btn sm sec" id="refp">Refresh 20 posters</button></div><p class="small muted" style="margin:8px 0 0">Titles are third-party content provided through the Syln API. Hide anything unavailable or that you are not licensed to show.</p></div>
   <div class="tw"><table><tr><th>Drama</th><th>Eps</th><th>Free eps</th><th>Coin price</th><th>Flags</th><th></th></tr>
   ${d.films.map(f => `<tr data-id="${esc(f.id)}"><td style="min-width:160px"><b>${esc(f.title)}</b><div class="muted small">${esc((f.genres || []).join(', '))}</div></td><td>${f.episode_count}</td>
   <td><input class="n" data-k="free_episodes" type="number" min="0" style="width:76px" value="${f.free_episodes ?? ''}" placeholder="global"></td>
@@ -56,10 +56,17 @@ async function films(v, page = 1, q = '') {
   $('#pp').onclick = () => films(v, page - 1, q); $('#np').onclick = () => films(v, page + 1, q);
   $('#sync').onclick = guard(async e => { e.target.disabled = true; toast('Syncing…'); const r = await api('/sync', { method: 'POST', body: { pages: 3 } }); if (r.failed?.length) alert(`Saved ${r.synced} dramas.\n\nProblems:\n` + r.failed.join('\n')); else toast(`Saved ${r.synced} dramas`); films(v, 1, q); });
   $('#deep').onclick = guard(async e => { if (!confirm('Deep sync uses up to 20 of your daily API requests (10 per platform). Continue?')) return; e.target.disabled = true; toast('Syncing…'); const r = await api('/sync', { method: 'POST', body: { pages: 10 } }); alert(`Saved ${r.synced} dramas.` + (r.failed?.length ? '\n\nProblems:\n' + r.failed.join('\n') : '')); films(v, 1, q); });
+  $('#refp').onclick = guard(async e => {
+    if (!confirm('This refreshes the covers of the 20 most-watched dramas that have none. It uses 20 of your daily API requests. Continue?')) return;
+    e.target.disabled = true; toast('Refreshing…');
+    const r = await api('/posters/refresh', { method: 'POST', body: { n: 20 } });
+    alert(`Dramas checked: ${r.tried}` + (r.failed ? `\nFailed: ${r.failed}  (${r.firstErr})` : '') + `\n\nSaved permanently: ${r.mirrored} of ${r.total}\nStill expired: ${r.expired}` + (r.lastError ? `\nLast problem: ${r.lastError}` : ''));
+    films(v, 1, q);
+  });
   $('#fixp').onclick = guard(async e => {
     e.target.disabled = true; toast('Checking posters…');
     const r = await api('/posters/fix', { method: 'POST' });
-    alert(`Posters\n\nSaved permanently: ${r.mirrored} of ${r.total}\nStill temporary (will expire): ${r.live}\nExpired (need a sync to refresh): ${r.expired}\nCopied just now: ${r.ok}` + (r.bad ? `\nCould not copy: ${r.bad}` : '') + (r.lastError ? `\nLast problem: ${r.lastError}` : '') + (r.expired ? '\n\nFor the expired ones, run "Deep sync". Covers it finds are saved permanently.' : ''));
+    alert(`Posters\n\nSaved permanently: ${r.mirrored} of ${r.total}\nStill temporary (will expire): ${r.live}\nExpired (need a sync to refresh): ${r.expired}\nCopied just now: ${r.ok}` + (r.bad ? `\nCould not copy: ${r.bad}` : '') + (r.lastError ? `\nLast problem: ${r.lastError}` : '') + `\nNewest cover link in the database is valid until: ${r.newest || 'n/a'}\nCopied from episode data: ${r.adopted || 0}` + (r.expired ? '\n\nFor the expired ones, run "Deep sync". Covers it finds are saved permanently.' : ''));
     films(v, 1, q);
   });
   v.querySelectorAll('tr[data-id]').forEach(tr => tr.addEventListener('change', guard(async e => {
