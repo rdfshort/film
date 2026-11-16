@@ -366,7 +366,7 @@ async function adoptCover(platform, code, list) {
 }
 // Refresh the covers of the most-watched dramas that have none or an expired one. Costs one API request each.
 async function refreshPosters(n = 20) {
-  const { data } = await db.from('films').select('id,poster_url,views').eq('hidden', false).order('views', { ascending: false }).limit(3000);
+  const { data } = await db.from('films').select('id,poster_url,created_at').eq('hidden', false).order('created_at', { ascending: false }).limit(3000);
   const todo = (data || []).filter(f => !isMirrored(f.poster_url)).slice(0, Math.max(1, Math.min(60, n)));
   let tried = 0, failed = 0, firstErr = '';
   for (const f of todo) {
@@ -476,4 +476,4 @@ function warmEpisodes(fullId, platform) {
   try { const sp = splitId(fullId, platform); if (sp.platform) episodesRaw(sp.platform, sp.code).catch(() => {}); } catch { /* ignore */ }
 }
 
-module.exports = { refreshPosters, posterReport, fixPosters, warmEpisodes, cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, searchAll, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };
+module.exports = { isMirrored, refreshPosters, posterReport, fixPosters, warmEpisodes, cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, searchAll, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };

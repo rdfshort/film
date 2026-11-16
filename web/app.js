@@ -303,7 +303,7 @@ async function vLibrary(t, q) {
     }
     if (t === tok) {
       $('#lib').innerHTML = html;
-      if (tab === 'downloads') $('#lib').onclick = async e => { const b = e.target.closest('[data-dldel]'); if (!b) return; const [id, ep] = b.dataset.dldel.split('|'); const d = dlGet(id, +ep); if (d) { await dlRemove(d); $('#lib').innerHTML = dlHtml(); toast('Removed'); } };
+      if (tab === 'downloads') $('#lib').onclick = async e => { const x = e.target.closest('[data-dlexp]'); if (x) { const [xi, xe] = x.dataset.dlexp.split('|'); const xd = dlGet(xi, +xe); if (xd) exportEpisode(xd); return; } const b = e.target.closest('[data-dldel]'); if (!b) return; const [id, ep] = b.dataset.dldel.split('|'); const d = dlGet(id, +ep); if (d) { await dlRemove(d); $('#lib').innerHTML = dlHtml(); toast('Removed'); } };
     }
   } catch (e) { if (t === tok) $('#lib').innerHTML = errView(netMsg(e)); }
 }
@@ -717,10 +717,40 @@ async function downloadEpisode() {
   }
 }
 
+
+// Admin only: join a downloaded episode's pieces into one file and hand it to the phone's share sheet ("Save to Files", Drive, etc.).
+async function exportEpisode(d) {
+  const F = FSP(), SH = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Share;
+  if (!F || !SH) return toast('Export needs the latest app version.');
+  if (!S.me || S.me.role !== 'admin') return toast('Export is for admins only.');
+  if (d.type !== 'hls') return toast('This download cannot be exported.');
+  toast('Preparing file…');
+  try {
+    try { await F.rmdir({ path: 'export', directory: 'CACHE', recursive: true }); } catch {}
+    const pl = (await F.readFile({ path: d.dir + '/' + d.file, directory: 'DATA', encoding: 'utf8' })).data;
+    if (/#EXT-X-KEY:(?!METHOD=NONE)/.test(pl)) return toast('This episode is encrypted and cannot be exported.');
+    const names = [];
+    for (const line of pl.split(/\r?\n/)) {
+      const m = /^#EXT-X-MAP.*URI="([^"]+)"/.exec(line); if (m) names.push(m[1]);
+      else if (line && !line.startsWith('#')) names.push(line.trim());
+    }
+    if (!names.length) throw new Error('nothing to export');
+    const ext = names.some(n => /\.(m4s|mp4)$/i.test(n)) ? 'mp4' : 'ts';
+    const out = 'export/' + dlSafe(d.filmTitle || d.id) + '_ep' + d.ep + '.' + ext;
+    for (let i = 0; i < names.length; i++) {
+      const chunk = await F.readFile({ path: d.dir + '/' + names[i], directory: 'DATA' }); // base64
+      if (i === 0) await F.writeFile({ path: out, data: chunk.data, directory: 'CACHE', recursive: true });
+      else await F.appendFile({ path: out, data: chunk.data, directory: 'CACHE' });
+    }
+    const { uri } = await F.getUri({ path: out, directory: 'CACHE' });
+    await SH.share({ title: (d.filmTitle || 'Episode') + ' episode ' + d.ep, files: [uri], dialogTitle: 'Save or send the episode' });
+  } catch (e) { toast('Export failed: ' + errTxt(e)); }
+}
+
 function dlHtml() {
   const l = dlAll().sort((a, b) => b.at - a.at);
   if (!l.length) return `<div class="empty"><p>No downloads yet. Open an episode and tap the download button.</p></div>`;
-  return `<div class="box">${l.map(u => `<div class="li"><a href="#/watch/${encodeURIComponent(u.id)}/${u.ep}" style="flex:1;color:inherit;text-decoration:none">${esc(u.filmTitle)}<div class="muted small">Episode ${u.ep}${dlExpired(u) ? ' · expired' : ''}</div></a><button class="btn sm sec" data-dldel="${esc(u.id)}|${u.ep}">Remove</button></div>`).join('')}</div>`;
+  return `<div class="box">${l.map(u => `<div class="li"><a href="#/watch/${encodeURIComponent(u.id)}/${u.ep}" style="flex:1;color:inherit;text-decoration:none">${esc(u.filmTitle)}<div class="muted small">Episode ${u.ep}${dlExpired(u) ? ' · expired' : ''}</div></a>${S.me && S.me.role === 'admin' && u.type === 'hls' ? `<button class="btn sm sec" data-dlexp="${esc(u.id)}|${u.ep}" style="margin-right:6px">Export</button>` : ''}<button class="btn sm sec" data-dldel="${esc(u.id)}|${u.ep}">Remove</button></div>`).join('')}</div>`;
 }
 
 /* ───────── notifications: inbox bell + phone push ───────── */

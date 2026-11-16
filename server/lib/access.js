@@ -22,6 +22,7 @@ async function authorize(user, film, ep) {
   const vipOnly = await vipOnlyFilm(film);
   const pol = policyFor(film, ep, settings, vipOnly);
   if (pol.free) return { allowed: true, reason: 'free', ...pol };
+  if (user && user.role === 'admin') return { allowed: true, reason: 'admin', ...pol }; // admins watch everything free
   if (user) {
     if (isVip(user) && film.vip_eligible) return { allowed: true, reason: 'vip', ...pol };
     if (!pol.vipOnly) {
@@ -41,7 +42,7 @@ async function annotateEpisodes(user, film, eps) {
     const { data } = await db.from('unlocks').select('ep_no').eq('user_id', user.id).eq('film_id', film.id);
     unlocked = new Set((data || []).map(r => r.ep_no));
   }
-  const vip = isVip(user) && film.vip_eligible;
+  const vip = (isVip(user) && film.vip_eligible) || !!(user && user.role === 'admin');
   return eps.map(e => {
     const p = policyFor(film, e, settings, vipOnly);
     const open = p.free || vip || (!p.vipOnly && unlocked.has(e.ep_no));

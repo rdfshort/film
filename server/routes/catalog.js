@@ -6,6 +6,9 @@ const { annotateEpisodes } = require('../lib/access');
 
 router.use(optionalAuth);
 
+// Dramas with a working poster go first, so the home screen looks right while covers are being repaired.
+const mirroredFirst = arr => [...(arr || [])].sort((a, b) => (syln.isMirrored(b.poster_url) ? 1 : 0) - (syln.isMirrored(a.poster_url) ? 1 : 0));
+
 const CARD = 'id,title,poster_url,genres,episode_count,featured,collections,views,created_at,vip_eligible';
 
 // Refresh the catalogue in the background when it is empty or older than 6h (never blocks the request).
@@ -41,9 +44,9 @@ router.get('/home', wrap(async (req, res) => {
   maybeSync();
   const vis = () => db.from('films').select(CARD).eq('hidden', false);
   const [featured, trending, latest, colls, genresQ] = await Promise.all([
-    vis().eq('featured', true).limit(12),
-    vis().order('views', { ascending: false }).limit(12),
-    vis().order('created_at', { ascending: false }).limit(18),
+    vis().eq('featured', true).limit(40),
+    vis().order('views', { ascending: false }).limit(80),
+    vis().order('created_at', { ascending: false }).limit(80),
     db.from('collections').select('slug,title,vip_only').eq('active', true).order('sort'),
     db.from('films').select('genres').eq('hidden', false).limit(400),
   ]);
@@ -64,10 +67,10 @@ router.get('/home', wrap(async (req, res) => {
   }
   const collections = [];
   for (const c of (colls.data || []).slice(0, 4)) {
-    const { data } = await vis().contains('collections', [c.slug]).limit(12);
-    if (data?.length) collections.push({ ...c, films: data });
+    const { data } = await vis().contains('collections', [c.slug]).limit(40);
+    if (data?.length) collections.push({ ...c, films: mirroredFirst(data).slice(0, 12) });
   }
-  res.json({ featured: featured.data || [], trending: trending.data || [], latest: latest.data || [], categories, collections, continueWatching: cont });
+  res.json({ featured: mirroredFirst(featured.data).slice(0, 12), trending: mirroredFirst(trending.data).slice(0, 12), latest: mirroredFirst(latest.data).slice(0, 18), categories, collections, continueWatching: cont });
 }));
 
 router.get('/films', wrap(async (req, res) => {

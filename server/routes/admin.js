@@ -177,6 +177,7 @@ router.post('/users/:id/coins', wrap(async (req, res) => {
   if (!isUuid(req.params.id)) return res.status(400).json({ error: 'bad_id' });
   const delta = Math.trunc(Number(req.body.delta));
   if (!Number.isFinite(delta) || delta === 0 || Math.abs(delta) > 1_000_000) return res.status(400).json({ error: 'bad_delta' });
+  await db.from('wallets').upsert({ user_id: req.params.id }, { onConflict: 'user_id', ignoreDuplicates: true }); // accounts without a wallet row get one
   const { data, error } = await db.rpc('admin_adjust_coins', { p_user: req.params.id, p_delta: delta, p_note: String(req.body.note || 'admin').slice(0, 60) });
   if (error) throw error;
   if (data && data.ok && delta > 0) push.notify({ audience: 'user', userIds: [req.params.id], kind: 'gift', url: '#/wallet', title: 'You received free coins', body: `${delta.toLocaleString()} coins were added to your wallet.` }).catch(() => {});
