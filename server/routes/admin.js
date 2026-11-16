@@ -154,10 +154,14 @@ router.post('/transactions/:ref/refund', wrap(async (req, res) => {
 // ── users ──
 router.get('/users', wrap(async (req, res) => {
   const page = clampInt(req.query.page, 1, 1000, 1), size = 30, q = String(req.query.q || '').trim().slice(0, 80);
-  let qb = db.from('profiles').select('id,email,display_name,role,disabled,vip_until,created_at,wallets(balance)', { count: 'exact' });
+  let qb = db.from('profiles').select('id,email,display_name,role,disabled,vip_until,created_at', { count: 'exact' });
   if (q) qb = qb.ilike('email', `%${q.replace(/[%_,]/g, ' ')}%`);
-  const { data, count } = await qb.order('created_at', { ascending: false }).range((page - 1) * size, page * size - 1);
-  res.json({ items: data || [], total: count || 0, page, pageSize: size });
+  const { data, count, error } = await qb.order('created_at', { ascending: false }).range((page - 1) * size, page * size - 1);
+  if (error) throw error;
+  const ids = (data || []).map(u => u.id);
+  const { data: ws } = ids.length ? await db.from('wallets').select('user_id,balance').in('user_id', ids) : { data: [] };
+  const bal = Object.fromEntries((ws || []).map(w => [w.user_id, w.balance]));
+  res.json({ items: (data || []).map(u => ({ ...u, wallets: { balance: bal[u.id] || 0 } })), total: count || 0, page, pageSize: size });
 }));
 router.patch('/users/:id', wrap(async (req, res) => {
   if (!isUuid(req.params.id)) return res.status(400).json({ error: 'bad_id' });
