@@ -1,9 +1,10 @@
 const router = require('express').Router();
 const { db, wrap, clampInt, safeId } = require('../lib/core');
-const { optionalAuth, requireAuth } = require('../lib/auth');
+const { requireAuth } = require('../lib/auth');
 const syln = require('../lib/syln');
 const { authorize, downloadRights } = require('../lib/access');
 
+router.use(requireAuth);
 
 async function load(filmId, ep) {
   if (!safeId(filmId) || !Number.isInteger(ep) || ep < 1) return {};
@@ -15,21 +16,18 @@ async function load(filmId, ep) {
 }
 
 // Authorise → ask Syln for a FRESH playback URL → return it. A URL is never returned for a locked episode.
-router.post('/play', optionalAuth, wrap(async (req, res) => {
-  if (req.user && req.user.disabled) req.user = null;
+router.post('/play', wrap(async (req, res) => {
   const filmId = String(req.body.filmId || ''), ep = Number(req.body.ep);
   const { film, episode } = await load(filmId, ep);
   if (!film || !episode) return res.status(404).json({ error: 'not_found' });
 
   const a = await authorize(req.user, film, episode);
   if (!a.allowed) {
-    if (!req.user) return res.status(401).json({ error: 'auth_required', locked: true, price: a.price, vipOnly: a.vipOnly }); // guests: free episodes only
     const { data: w } = await db.from('wallets').select('balance').eq('user_id', req.user.id).maybeSingle();
     return res.status(402).json({ error: a.reason, locked: true, price: a.price, vipOnly: a.vipOnly, balance: w?.balance || 0 });
   }
   let dl = null;
   if (req.body.download) {
-    if (!req.user) return res.status(401).json({ error: 'auth_required' });
     dl = await downloadRights(req.user);
     if (!dl.ok) return res.status(403).json({ error: 'download_vip', message: 'Downloads are for VIP Monthly members.' });
   }
@@ -37,7 +35,7 @@ router.post('/play', optionalAuth, wrap(async (req, res) => {
     const [p, { data: next }, { data: hist }] = await Promise.all([
       syln.getPlayback(filmId, { no: ep, id: episode.provider_episode_id }, film.platform),
       db.from('episodes').select('ep_no').eq('film_id', filmId).eq('hidden', false).gt('ep_no', ep).order('ep_no').limit(1),
-      req.user ? db.from('watch_history').select('position_sec').eq('user_id', req.user.id).eq('film_id', filmId).eq('ep_no', ep).maybeSingle() : Promise.resolve({ data: null }),
+      db.from('watch_history').select('position_sec').eq('user_id', req.user.id).eq('film_id', filmId).eq('ep_no', ep).maybeSingle(),
     ]);
     res.set('Cache-Control', 'no-store');
     res.json({
@@ -53,12 +51,12 @@ router.post('/play', optionalAuth, wrap(async (req, res) => {
   }
 }));
 
-router.post('/unlock', requireAuth, wrap(async (req, res) => {
+router.post('/unlock', wrap(async (req, res) => {
   const filmId = String(req.body.filmId || ''), ep = Number(req.body.ep);
   const { film, episode } = await load(filmId, ep);
   if (!film || !episode) return res.status(404).json({ error: 'not_found' });
   const a = await authorize(req.user, film, episode);
-  if (['free', 'vip', 'admin'].includes(a.reason)) return res.json({ ok: true, already: true, access: a.reason });
+  if (a.reason === 'free' || a.reason === 'vip') return res.json({ ok: true, already: true, access: a.reason });
   if (a.reason === 'unlocked') return res.json({ ok: true, already: true, access: 'unlocked' });
   if (a.vipOnly) return res.status(403).json({ error: 'vip_required' });
   // price comes from the server's policy, never from the client
@@ -68,7 +66,7 @@ router.post('/unlock', requireAuth, wrap(async (req, res) => {
   res.json({ ok: true, already: !!data.already, balance: data.balance, price: a.price });
 }));
 
-router.post('/progress', requireAuth, wrap(async (req, res) => {
+router.post('/progress', wrap(async (req, res) => {
   const filmId = String(req.body.filmId || ''), ep = Number(req.body.ep);
   if (!safeId(filmId) || !Number.isInteger(ep) || ep < 1) return res.status(400).json({ error: 'bad_request' });
   // only record progress for episodes the user may actually watch
