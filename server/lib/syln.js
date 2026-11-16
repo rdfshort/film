@@ -311,7 +311,7 @@ async function ping() {
 // ── poster mirroring ─────────────────────────────────────────────────────────────────────────────
 // The provider's cover links are signed and stop working after ~8 hours. We copy each cover once, while its link is
 // still valid, into a public Supabase Storage bucket ("posters") and keep that permanent link instead.
-const MIRROR = `${appConfig.supabaseUrl}/storage/v1/object/public/posters/`;
+const MIRROR = db.storage.from('posters').getPublicUrl('x').data.publicUrl.slice(0, -1); // the bucket's public address
 const isMirrored = u => !!u && String(u).startsWith(MIRROR);
 const posterExpiry = u => { const m = /auth_key=(\d+)-/.exec(String(u || '')); return m ? Number(m[1]) * 1000 : 0; };
 const posterDead = u => { const e = posterExpiry(u); return !!e && e < Date.now() + 30_000; };
@@ -379,11 +379,11 @@ async function refreshPosters(n = 20) {
 }
 async function posterReport() {
   const { data } = await db.from('films').select('poster_url').limit(5000);
-  const r = { total: 0, mirrored: 0, live: 0, expired: 0, none: 0, lastError: lastMirrorError, adopted: mirrorStats.adopted, newest: '' };
+  const r = { sample: '', total: 0, mirrored: 0, live: 0, expired: 0, none: 0, lastError: lastMirrorError, adopted: mirrorStats.adopted, newest: '' };
   let best = 0;
   for (const f of data || []) {
     r.total++;
-    if (!f.poster_url) r.none++; else if (isMirrored(f.poster_url)) r.mirrored++; else if (posterDead(f.poster_url)) r.expired++; else r.live++;
+    if (!f.poster_url) r.none++; else if (isMirrored(f.poster_url)) { r.mirrored++; r.sample = r.sample || f.poster_url; } else if (posterDead(f.poster_url)) r.expired++; else r.live++;
     const e = posterExpiry(f.poster_url); if (e > best) best = e;
   }
   if (best) r.newest = new Date(best).toISOString().slice(0, 16).replace('T', ' ') + ' UTC';

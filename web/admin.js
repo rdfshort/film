@@ -66,7 +66,7 @@ async function films(v, page = 1, q = '') {
   $('#fixp').onclick = guard(async e => {
     e.target.disabled = true; toast('Checking posters…');
     const r = await api('/posters/fix', { method: 'POST' });
-    alert(`Posters\n\nSaved permanently: ${r.mirrored} of ${r.total}\nStill temporary (will expire): ${r.live}\nExpired (need a sync to refresh): ${r.expired}\nCopied just now: ${r.ok}` + (r.bad ? `\nCould not copy: ${r.bad}` : '') + (r.lastError ? `\nLast problem: ${r.lastError}` : '') + `\nNewest cover link in the database is valid until: ${r.newest || 'n/a'}\nCopied from episode data: ${r.adopted || 0}` + (r.expired ? '\n\nFor the expired ones, run "Deep sync". Covers it finds are saved permanently.' : ''));
+    alert(`Posters\n\nSaved permanently: ${r.mirrored} of ${r.total}\nStill temporary (will expire): ${r.live}\nExpired (need a sync to refresh): ${r.expired}\nCopied just now: ${r.ok}` + (r.bad ? `\nCould not copy: ${r.bad}` : '') + (r.lastError ? `\nLast problem: ${r.lastError}` : '') + `\nExample saved poster (open it in a browser): ${r.sample || 'none yet'}\nNewest cover link in the database is valid until: ${r.newest || 'n/a'}\nCopied from episode data: ${r.adopted || 0}` + (r.expired ? '\n\nFor the expired ones, run "Deep sync". Covers it finds are saved permanently.' : ''));
     films(v, 1, q);
   });
   v.querySelectorAll('tr[data-id]').forEach(tr => tr.addEventListener('change', guard(async e => {
