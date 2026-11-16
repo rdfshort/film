@@ -379,7 +379,7 @@ function closePlayer(silent) {
 const guard = e => { const v = $('#vid'); if (v && !v.paused) { e.preventDefault(); e.returnValue = ''; } };
 
 function saveProgress(force) {
-  const v = $('#vid'); if (!P.open || !v || !P.ep || !P.access) return;
+  const v = $('#vid'); if (!P.open || !v || !P.ep || !P.access || !S.session) return;
   const pos = Math.floor(v.currentTime || 0); if (!force && pos === P.lastSaved) return;
   P.lastSaved = pos;
   api('/progress', { method: 'POST', body: { filmId: P.id, ep: P.ep, position: pos, duration: Math.floor(v.duration || 0) } }).catch(() => {});
@@ -397,7 +397,6 @@ async function openPlayer(id, ep) {
     if (!$('#main').querySelector('.det')) vFilm(t, id);
     return appPrompt();
   }
-  if (!S.session) { location.hash = '#/film/' + encodeURIComponent(id); return authModal('login'); }
   if (P.open && P.id === id) return loadEpisode(ep);
   closePlayer(true);
   let fd = S.film[id];
@@ -481,7 +480,7 @@ async function loadEpisode(ep) {
     if (P.ep !== ep || !P.open) return;
     ready0();
     if (e.status === 402) return lockScreen(ep, e.data);
-    if (e.status === 401) { closePlayer(true); return authModal('login'); }
+    if (e.status === 401) return guestLock(ep, e.data);
     if (e.status === 404) return povSet(`<div class="lock"><h3>Episode unavailable</h3><p class="muted">This episode isn't available right now.</p>${P.eps.some(x => x.ep_no === ep + 1) ? `<button class="btn" data-pv="next">Next episode</button>` : ''}<button class="btn sec" data-pv="back">Back to drama</button></div>`);
     povSet(`<div class="lock"><h3>${e.offline ? 'You are offline' : 'Having trouble playing'}</h3><p class="muted">${e.offline ? 'Reconnect to keep watching.' : 'The video service is busy. Please try again.'}</p><button class="btn" data-pv="retry">Try again</button><button class="btn sec" data-pv="back">Back to drama</button></div>`);
   }
@@ -536,6 +535,13 @@ async function refreshSource() {
 function endScreen() {
   povSet(`<div class="lock"><h3>That's the last episode</h3><p class="muted">More dramas are waiting for you.</p><button class="btn" data-pv="more">Browse dramas</button><button class="btn sec" data-pv="back">Back to drama</button></div>`);
 }
+// A visitor who is not logged in reached a premium episode: the free ones played, now ask them to sign up.
+function guestLock(ep, d) {
+  d = d || {};
+  povSet(`<div class="lock"><div class="lk2">${ic('lock')}</div><h3>Sign up to keep watching</h3>
+    <p class="muted">Episode ${ep} ${d.vipOnly ? 'is for VIP members' : 'is a premium episode'}. Create a free account to unlock it, or log in if you already have one.</p>
+    <button class="btn" data-pv="signup">Create free account</button><button class="btn sec" data-pv="login">Log in</button><button class="btn sec" data-pv="eps">Choose another episode</button></div>`);
+}
 function lockScreen(ep, d) {
   d = d || {};
   const vipOnly = d.vipOnly;
@@ -560,6 +566,8 @@ document.addEventListener('click', async e => {
   else if (a === 'more') { closePlayer(true); location.hash = '#/discover'; }
   else if (a === 'next') loadEpisode(P.ep + 1);
   else if (a === 'retry') loadEpisode(P.ep);
+  else if (a === 'signup') authModal('register');
+  else if (a === 'login') authModal('login');
   else if (a === 'eps') epSheet();
   else if (a === 'vip') { S.afterPay = async () => { await refreshEps(); loadEpisode(P.ep); }; vipSheet(); }
   else if (a === 'unlock') {
@@ -693,6 +701,7 @@ async function downloadEpisode() {
   let d;
   try { d = await api('/play', { method: 'POST', body: { filmId: id, ep, download: true } }); }
   catch (e) {
+    if (e.status === 401) return authModal('login');
     if (e.status === 403) return modal(`<h3>VIP Monthly feature</h3><p class="muted">Downloads are for VIP Monthly members.</p><button class="btn gold block" data-act="vip">${ic('crown')} Go VIP</button>`);
     if (e.status === 402) return toast('Unlock this episode first');
     return toast((e.data && e.data.message) || netMsg(e));
