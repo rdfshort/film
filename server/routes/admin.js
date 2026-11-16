@@ -169,13 +169,41 @@ router.patch('/users/:id', wrap(async (req, res) => {
   cache.clear();
   res.json({ ok: true });
 }));
+router.get('/posters', wrap(async (_req, res) => res.json(await syln.posterReport())));
+router.post('/posters/fix', wrap(async (_req, res) => res.json(await syln.fixPosters())));
+
 router.post('/users/:id/coins', wrap(async (req, res) => {
   if (!isUuid(req.params.id)) return res.status(400).json({ error: 'bad_id' });
   const delta = Math.trunc(Number(req.body.delta));
   if (!Number.isFinite(delta) || delta === 0 || Math.abs(delta) > 1_000_000) return res.status(400).json({ error: 'bad_delta' });
   const { data, error } = await db.rpc('admin_adjust_coins', { p_user: req.params.id, p_delta: delta, p_note: String(req.body.note || 'admin').slice(0, 60) });
   if (error) throw error;
+  if (data && data.ok && delta > 0) push.notify({ audience: 'user', userIds: [req.params.id], kind: 'gift', url: '#/wallet', title: 'You received free coins', body: `${delta.toLocaleString()} coins were added to your wallet.` }).catch(() => {});
   res.json(data);
+}));
+
+// Give (or take away) VIP. plan = weekly | monthly: the plan decides the length, and Monthly also unlocks downloads.
+router.post('/users/:id/vip', wrap(async (req, res) => {
+  if (!isUuid(req.params.id)) return res.status(400).json({ error: 'bad_id' });
+  const uid = req.params.id;
+  if (req.body.remove) {
+    await db.from('subscriptions').update({ status: 'cancelled', expires_at: new Date().toISOString() }).eq('user_id', uid).eq('status', 'active');
+    await db.from('profiles').update({ vip_until: null }).eq('id', uid);
+    cache.clear(); return res.json({ ok: true, vip_until: null });
+  }
+  const code = String(req.body.plan || '');
+  if (!['weekly', 'monthly'].includes(code)) return res.status(400).json({ error: 'bad_plan', message: 'Choose weekly or monthly.' });
+  const { data: plan } = await db.from('vip_plans').select('id,days,name').eq('code', code).maybeSingle();
+  if (!plan) return res.status(404).json({ error: 'no_plan', message: 'That VIP plan does not exist yet.' });
+  const { data: prof } = await db.from('profiles').select('vip_until').eq('id', uid).maybeSingle();
+  const start = prof && prof.vip_until && new Date(prof.vip_until) > new Date() ? new Date(prof.vip_until) : new Date();
+  const until = new Date(start.getTime() + plan.days * 864e5).toISOString();
+  const { error } = await db.from('subscriptions').insert({ user_id: uid, plan_id: plan.id, status: 'active', expires_at: until, reference: 'admin-gift' });
+  if (error) throw error;
+  await db.from('profiles').update({ vip_until: until }).eq('id', uid);
+  cache.clear();
+  push.notify({ audience: 'user', userIds: [uid], kind: 'gift', url: '#/profile', title: 'VIP unlocked for you', body: `You now have ${plan.name} until ${until.slice(0, 10)}.` }).catch(() => {});
+  res.json({ ok: true, vip_until: until });
 }));
 
 router.get('/notifications', wrap(async (_req, res) => {
@@ -183,7 +211,8 @@ router.get('/notifications', wrap(async (_req, res) => {
     db.from('notifications').select('id,audience,title,body,created_at').neq('audience', 'user').order('created_at', { ascending: false }).limit(30),
     db.from('device_tokens').select('id', { count: 'exact', head: true }),
   ]);
-  res.json({ items: items || [], devices: count || 0, pushReady: push.isReady() });
+  const { count: users } = await db.from('profiles').select('id', { count: 'exact', head: true });
+  res.json({ items: items || [], devices: count || 0, users: users || 0, pushReady: push.isReady() });
 }));
 router.post('/notify', wrap(async (req, res) => {
   const audience = String(req.body.audience || '');

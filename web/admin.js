@@ -42,7 +42,7 @@ async function overview(v) {
 /* ── catalogue ── */
 async function films(v, page = 1, q = '') {
   const d = await api(`/films?page=${page}&q=${encodeURIComponent(q)}`);
-  v.innerHTML = `<div class="box" style="margin:0 0 12px"><div class="frm"><div><label class="small muted">Search</label><input id="fq" value="${esc(q)}" placeholder="Title…"></div><button class="btn sm sec" id="fs">Search</button><button class="btn sm" id="sync">Sync from Syln</button></div><p class="small muted" style="margin:8px 0 0">Titles are third-party content provided through the Syln API. Hide anything unavailable or that you are not licensed to show.</p></div>
+  v.innerHTML = `<div class="box" style="margin:0 0 12px"><div class="frm"><div><label class="small muted">Search</label><input id="fq" value="${esc(q)}" placeholder="Title…"></div><button class="btn sm sec" id="fs">Search</button><button class="btn sm" id="sync">Sync from Syln</button><button class="btn sm sec" id="deep">Deep sync (10 pages)</button><button class="btn sm sec" id="fixp">Fix posters</button></div><p class="small muted" style="margin:8px 0 0">Titles are third-party content provided through the Syln API. Hide anything unavailable or that you are not licensed to show.</p></div>
   <div class="tw"><table><tr><th>Drama</th><th>Eps</th><th>Free eps</th><th>Coin price</th><th>Flags</th><th></th></tr>
   ${d.films.map(f => `<tr data-id="${esc(f.id)}"><td style="min-width:160px"><b>${esc(f.title)}</b><div class="muted small">${esc((f.genres || []).join(', '))}</div></td><td>${f.episode_count}</td>
   <td><input class="n" data-k="free_episodes" type="number" min="0" style="width:76px" value="${f.free_episodes ?? ''}" placeholder="global"></td>
@@ -55,6 +55,13 @@ async function films(v, page = 1, q = '') {
   $('#fq').onkeydown = e => { if (e.key === 'Enter') $('#fs').click(); };
   $('#pp').onclick = () => films(v, page - 1, q); $('#np').onclick = () => films(v, page + 1, q);
   $('#sync').onclick = guard(async e => { e.target.disabled = true; toast('Syncing…'); const r = await api('/sync', { method: 'POST', body: { pages: 3 } }); if (r.failed?.length) alert(`Saved ${r.synced} dramas.\n\nProblems:\n` + r.failed.join('\n')); else toast(`Saved ${r.synced} dramas`); films(v, 1, q); });
+  $('#deep').onclick = guard(async e => { if (!confirm('Deep sync uses up to 20 of your daily API requests (10 per platform). Continue?')) return; e.target.disabled = true; toast('Syncing…'); const r = await api('/sync', { method: 'POST', body: { pages: 10 } }); alert(`Saved ${r.synced} dramas.` + (r.failed?.length ? '\n\nProblems:\n' + r.failed.join('\n') : '')); films(v, 1, q); });
+  $('#fixp').onclick = guard(async e => {
+    e.target.disabled = true; toast('Checking posters…');
+    const r = await api('/posters/fix', { method: 'POST' });
+    alert(`Posters\n\nSaved permanently: ${r.mirrored} of ${r.total}\nStill temporary (will expire): ${r.live}\nExpired (need a sync to refresh): ${r.expired}\nCopied just now: ${r.ok}` + (r.bad ? `\nCould not copy: ${r.bad}` : '') + (r.lastError ? `\nLast problem: ${r.lastError}` : '') + (r.expired ? '\n\nFor the expired ones, run "Deep sync". Covers it finds are saved permanently.' : ''));
+    films(v, 1, q);
+  });
   v.querySelectorAll('tr[data-id]').forEach(tr => tr.addEventListener('change', guard(async e => {
     const k = e.target.dataset.k; if (!k) return;
     const val = e.target.type === 'checkbox' ? e.target.checked : e.target.value.trim();
@@ -120,7 +127,7 @@ async function users(v, q = '', page = 1) {
   v.innerHTML = `<div class="frm" style="margin-bottom:10px"><div><input id="uq" placeholder="Search email…" value="${esc(q)}"></div><button class="btn sm sec" id="us">Search</button></div>
   <div class="tw"><table><tr><th>User</th><th>Coins</th><th>VIP until</th><th>Role</th><th>Joined</th><th></th></tr>
   ${d.items.map(u => `<tr data-id="${u.id}"><td>${esc(u.email)}<div class="muted small">${esc(u.display_name || '')}</div></td><td>${u.wallets?.balance ?? 0}</td><td>${u.vip_until && new Date(u.vip_until) > new Date() ? dt(u.vip_until) : '—'}</td><td>${u.role}</td><td>${dt(u.created_at)}</td>
-  <td style="white-space:nowrap"><button class="btn sm sec" data-coins>± Coins</button> <button class="btn sm sec" data-dis>${u.disabled ? 'Enable' : 'Disable'}</button> <button class="btn sm sec" data-role="${u.role === 'admin' ? 'user' : 'admin'}">${u.role === 'admin' ? 'Remove admin' : 'Make admin'}</button></td></tr>`).join('')}</table></div>
+  <td style="white-space:nowrap"><button class="btn sm sec" data-coins>± Coins</button> <button class="btn sm sec" data-vip>Give VIP</button> <button class="btn sm sec" data-dis>${u.disabled ? 'Enable' : 'Disable'}</button> <button class="btn sm sec" data-role="${u.role === 'admin' ? 'user' : 'admin'}">${u.role === 'admin' ? 'Remove admin' : 'Make admin'}</button></td></tr>`).join('')}</table></div>
   <div style="display:flex;gap:8px;justify-content:center"><button class="btn sec sm" id="pp" ${page <= 1 ? 'disabled' : ''}>Prev</button><span class="muted small" style="align-self:center">Page ${page} · ${d.total}</span><button class="btn sec sm" id="np" ${page * d.pageSize >= d.total ? 'disabled' : ''}>Next</button></div>`;
   $('#us').onclick = () => users(v, $('#uq').value.trim(), 1); $('#uq').onkeydown = e => { if (e.key === 'Enter') $('#us').click(); };
   $('#pp').onclick = () => users(v, q, page - 1); $('#np').onclick = () => users(v, q, page + 1);
@@ -128,6 +135,11 @@ async function users(v, q = '', page = 1) {
   v.querySelectorAll('tr[data-id]').forEach(tr => {
     const id = tr.dataset.id;
     $('[data-coins]', tr).onclick = guard(async () => { const n = prompt('Add (positive) or remove (negative) coins:', '50'); if (!n) return; const r = await api(`/users/${id}/coins`, { method: 'POST', body: { delta: n, note: 'admin' } }); if (!r.ok) throw new Error('Not allowed (balance cannot go below 0)'); toast('Balance: ' + r.balance); users(v, q, page); });
+    $('[data-vip]', tr).onclick = guard(async () => {
+      const a = prompt('Give VIP: type  weekly  or  monthly\n(type  remove  to cancel their VIP)', 'monthly'); if (!a) return;
+      const r = a.trim().toLowerCase() === 'remove' ? await api(`/users/${id}/vip`, { method: 'POST', body: { remove: true } }) : await api(`/users/${id}/vip`, { method: 'POST', body: { plan: a.trim().toLowerCase() } });
+      toast(r.vip_until ? 'VIP active until ' + String(r.vip_until).slice(0, 10) : 'VIP removed'); users(v, q, page);
+    });
     $('[data-dis]', tr).onclick = guard(async () => { await api('/users/' + id, { method: 'PATCH', body: { disabled: !row[id].disabled } }); users(v, q, page); });
     $('[data-role]', tr).onclick = guard(async e => { if (!confirm('Change this user\'s role?')) return; await api('/users/' + id, { method: 'PATCH', body: { role: e.target.dataset.role } }); users(v, q, page); });
   });
@@ -137,7 +149,7 @@ async function users(v, q = '', page = 1) {
 async function notify(v) {
   const d = await api('/notifications');
   v.innerHTML = `<div class="card" style="padding:14px;margin-bottom:14px"><b>Send a notification</b>
-    <div class="muted small" style="margin:4px 0 10px">${d.devices} phone${d.devices === 1 ? '' : 's'} registered for push. ${d.pushReady ? '' : '<b style="color:#ff6b6b">Push is not set up on the server yet, so messages only appear in the in-app inbox.</b>'}</div>
+    <div class="muted small" style="margin:4px 0 10px">${d.devices} phone${d.devices === 1 ? '' : 's'} can get push notifications (of ${d.users} users). A phone is counted once someone logs in on the latest app version and taps Allow. Everyone else sees messages in the bell inbox. ${d.pushReady ? '' : '<b style="color:#ff6b6b">Push is not set up on the server yet, so messages only appear in the in-app inbox.</b>'}</div>
     <div class="frm" style="flex-direction:column;align-items:stretch;gap:8px">
       <select id="na"><option value="all">Everyone</option><option value="vip">VIP members</option><option value="user">One user (by email)</option></select>
       <input id="ne" class="hide" placeholder="User email">

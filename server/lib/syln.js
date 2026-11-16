@@ -1,7 +1,7 @@
 // Syln API adapter. All provider specifics live here and in .env so that the rest of the app
 // only ever sees normalised films / episodes / playback objects.
 // The token is read from the environment and is only ever used in server-side requests.
-const { db, cache, env } = require('./core');
+const { db, cache, env, config: appConfig } = require('./core');
 
 // Render can't always store empty values, so the word "none" also means empty.
 const nz = v => (String(v).trim().toLowerCase() === 'none' ? '' : v);
@@ -303,13 +303,81 @@ async function ping() {
   catch (e) { return { ok: false, ms: Date.now() - t0, error: e.message, tokenConfigured: !!cfg.token }; }
 }
 
+
+// ── poster mirroring ─────────────────────────────────────────────────────────────────────────────
+// The provider's cover links are signed and stop working after ~8 hours. We copy each cover once, while its link is
+// still valid, into a public Supabase Storage bucket ("posters") and keep that permanent link instead.
+const MIRROR = `${appConfig.supabaseUrl}/storage/v1/object/public/posters/`;
+const isMirrored = u => !!u && String(u).startsWith(MIRROR);
+const posterExpiry = u => { const m = /auth_key=(\d+)-/.exec(String(u || '')); return m ? Number(m[1]) * 1000 : 0; };
+const posterDead = u => { const e = posterExpiry(u); return !!e && e < Date.now() + 30_000; };
+let bucketReady = false, lastMirrorError = '';
+async function ensureBucket() {
+  if (bucketReady) return;
+  const { error } = await db.storage.createBucket('posters', { public: true });
+  if (error && !/exist|duplicate/i.test(error.message)) throw error;
+  bucketReady = true;
+}
+async function mirrorOne(film) {
+  const u = film.poster_url;
+  if (!u || isMirrored(u)) return u;
+  if (posterDead(u)) throw new Error('cover link already expired');
+  await ensureBucket();
+  const r = await fetch(u, { signal: AbortSignal.timeout(10_000) });
+  if (!r.ok) throw new Error('cover HTTP ' + r.status);
+  const ct = r.headers.get('content-type') || 'image/jpeg';
+  if (!/^image\//i.test(ct)) throw new Error('cover is not an image');
+  const buf = Buffer.from(await r.arrayBuffer());
+  if (buf.length < 500 || buf.length > 3_000_000) throw new Error('cover has a strange size');
+  const name = String(film.id).replace(/[^a-z0-9_-]/gi, '_') + '.jpg';
+  const { error } = await db.storage.from('posters').upload(name, buf, { contentType: ct, upsert: true, cacheControl: '31536000' });
+  if (error) throw error;
+  return MIRROR + name;
+}
+async function mirrorMany(films, n = 5) {
+  let i = 0, ok = 0, bad = 0;
+  await Promise.all(Array.from({ length: n }, async () => {
+    while (i < films.length) {
+      const f = films[i++];
+      try { const u = await mirrorOne(f); if (u && u !== f.poster_url) { f.poster_url = u; ok++; } }
+      catch (e) { bad++; lastMirrorError = e.message; }
+    }
+  }));
+  return { ok, bad };
+}
+async function posterReport() {
+  const { data } = await db.from('films').select('poster_url').limit(5000);
+  const r = { total: 0, mirrored: 0, live: 0, expired: 0, none: 0, lastError: lastMirrorError };
+  for (const f of data || []) {
+    r.total++;
+    if (!f.poster_url) r.none++; else if (isMirrored(f.poster_url)) r.mirrored++; else if (posterDead(f.poster_url)) r.expired++; else r.live++;
+  }
+  return r;
+}
+// Copy every cover whose link is still valid into permanent storage.
+async function fixPosters(limit = 300) {
+  const { data } = await db.from('films').select('id,poster_url').not('poster_url', 'is', null).not('poster_url', 'like', MIRROR + '%').limit(2000);
+  const todo = (data || []).filter(f => !posterDead(f.poster_url)).slice(0, limit);
+  const res = await mirrorMany(todo);
+  for (const f of todo) if (isMirrored(f.poster_url)) await db.from('films').update({ poster_url: f.poster_url }).eq('id', f.id);
+  return { ...res, ...(await posterReport()) };
+}
+
 // ── persist metadata into Supabase cache (never overwrites admin settings) ──
 async function upsertFilms(films) {
   const uniq = [...new Map(films.map(f => [f.id, f])).values()]; // duplicates in one batch make Postgres reject the whole upsert
   const now = new Date().toISOString();
   let saved = 0;
   for (let i = 0; i < uniq.length; i += 100) {
-    const rows = uniq.slice(i, i + 100).map(f => ({ id: f.id, platform: f.platform, title: f.title, description: f.description, poster_url: f.poster_url, genres: f.genres, episode_count: f.episode_count, fetched_at: now }));
+    const chunk = uniq.slice(i, i + 100);
+    try { // keep covers we already copied; copy new ones while their signed link is fresh
+      const { data: ex } = await db.from('films').select('id,poster_url').in('id', chunk.map(f => f.id));
+      const have = new Map((ex || []).filter(r => isMirrored(r.poster_url)).map(r => [r.id, r.poster_url]));
+      const fresh = [];
+      for (const f of chunk) { if (have.has(f.id)) f.poster_url = have.get(f.id); else fresh.push(f); }
+      await mirrorMany(fresh);
+    } catch (e) { lastMirrorError = e.message; }
+    const rows = chunk.map(f => ({ id: f.id, platform: f.platform, title: f.title, description: f.description, poster_url: f.poster_url, genres: f.genres, episode_count: f.episode_count, fetched_at: now }));
     const { error } = await db.from('films').upsert(rows, { onConflict: 'id' });
     if (error) throw new Error('database: ' + error.message);
     saved += rows.length;
@@ -373,4 +441,4 @@ function warmEpisodes(fullId, platform) {
   try { const sp = splitId(fullId, platform); if (sp.platform) episodesRaw(sp.platform, sp.code).catch(() => {}); } catch { /* ignore */ }
 }
 
-module.exports = { warmEpisodes, cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, searchAll, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };
+module.exports = { posterReport, fixPosters, warmEpisodes, cfg, SylnError, listPlatforms, defaultPlatform, listCatalog, search, searchAll, getFilm, getEpisodes, getPlayback, ping, upsertFilms, upsertEpisodes, syncCatalogue, ensureFilm };
