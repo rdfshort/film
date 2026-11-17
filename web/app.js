@@ -114,6 +114,7 @@ function authModal(mode = 'login') {
   const m = modal(`
     <h3>${mode === 'register' ? 'Create your account' : mode === 'forgot' ? 'Reset password' : 'Welcome back'}</h3>
     <p class="muted small">${mode === 'forgot' ? 'We will email you a reset link.' : 'Watch free episodes, unlock premium ones and keep your progress.'}</p>
+    ${mode !== 'forgot' && S.cfg && S.cfg.googleLogin ? `<button type="button" class="btn sec block" id="gbtn" style="display:flex;gap:10px;align-items:center;justify-content:center"><svg viewBox="0 0 48 48" width="18" height="18" style="flex:none"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.38 2.56 13.22l7.98 6.19C12.43 13.72 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.15 1.45-4.92 2.3-8.16 2.3-6.26 0-11.57-4.22-13.47-9.91l-7.98 6.19C6.51 42.62 14.62 48 24 48z"/></svg> Continue with Google</button><div class="muted small" style="text-align:center;margin:12px 0">or use your email</div>` : ''}
     <form id="af">
       ${mode === 'register' ? '<div class="field"><label>Name</label><input name="name" maxlength="40" autocomplete="nickname" placeholder="Your name"></div>' : ''}
       <div class="field"><label>Email</label><input name="email" type="email" required autocomplete="email" placeholder="you@example.com"></div>
@@ -125,6 +126,7 @@ function authModal(mode = 'login') {
       ${mode === 'login' ? '<a href="#" data-m="register" style="color:var(--ac)">Create account</a> · <a href="#" data-m="forgot" style="color:var(--ac)">Forgot password?</a>' : '<a href="#" data-m="login" style="color:var(--ac)">Back to log in</a>'}
     </p>`);
   m.el.addEventListener('click', e => { const a = e.target.closest('[data-m]'); if (a) { e.preventDefault(); m.close(); authModal(a.dataset.m); } });
+  const gb = m.el.querySelector('#gbtn'); if (gb) gb.addEventListener('click', () => { gb.disabled = true; googleLogin().finally(() => { gb.disabled = false; }); });
   m.el.querySelector('#af').addEventListener('submit', async e => {
     e.preventDefault();
     const f = new FormData(e.target), err = $('#aerr', m.el), btn = $('button[type=submit]', m.el);
@@ -140,6 +142,34 @@ function authModal(mode = 'login') {
       if (mode === 'register' && !res.data.session) { m.el.innerHTML = '<h3>Confirm your email</h3><p class="muted">We sent a confirmation link. Open it, then log in.</p><button class="btn block" data-close>OK</button>'; return; }
       m.close(); toast(mode === 'register' ? 'Welcome!' : 'Logged in');
     } catch (ex) { err.textContent = /invalid login/i.test(ex.message) ? 'Wrong email or password.' : ex.message || 'Something went wrong.'; err.classList.remove('hide'); btn.disabled = false; }
+  });
+}
+const APP_SCHEME = 'com.reeldramafilm.app://auth-callback';
+async function googleLogin() {
+  try {
+    const { data, error } = await S.sb.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: NATIVE ? APP_SCHEME : location.origin + '/', skipBrowserRedirect: NATIVE } });
+    if (error) throw error;
+    if (NATIVE) {
+      const B = window.Capacitor.Plugins && window.Capacitor.Plugins.Browser;
+      if (!B) throw new Error('Update the app to use Google sign-in.');
+      await B.open({ url: data.url }); // Google refuses embedded browsers, so use the phone's own browser; it returns through the app link
+    }
+  } catch (e) { toast(/provider is not enabled/i.test(e.message || '') ? 'Google sign-in is not switched on yet.' : (e.message || 'Google sign-in failed')); }
+}
+// The phone's browser hands control back to the app with ?code=... (PKCE); swap it for a session.
+function wireAuthReturn() {
+  const A = NATIVE && window.Capacitor.Plugins && window.Capacitor.Plugins.App; if (!A) return;
+  A.addListener('appUrlOpen', async ev => {
+    const url = String((ev && ev.url) || ''); if (!url.startsWith('com.reeldramafilm.app://auth-callback')) return;
+    try { const B = window.Capacitor.Plugins.Browser; if (B) await B.close(); } catch {}
+    try {
+      const u = new URL(url), code = u.searchParams.get('code'), err = u.searchParams.get('error_description');
+      if (err) throw new Error(err);
+      if (!code) throw new Error('Sign-in was cancelled.');
+      const { error } = await S.sb.auth.exchangeCodeForSession(code);
+      if (error) throw error;
+      toast('Logged in');
+    } catch (e) { toast(e.message || 'Google sign-in failed'); }
   });
 }
 function newPasswordModal() {
@@ -379,7 +409,7 @@ function closePlayer(silent) {
 const guard = e => { const v = $('#vid'); if (v && !v.paused) { e.preventDefault(); e.returnValue = ''; } };
 
 function saveProgress(force) {
-  const v = $('#vid'); if (!P.open || !v || !P.ep || !P.access) return;
+  const v = $('#vid'); if (!P.open || !v || !P.ep || !P.access || !S.session) return;
   const pos = Math.floor(v.currentTime || 0); if (!force && pos === P.lastSaved) return;
   P.lastSaved = pos;
   api('/progress', { method: 'POST', body: { filmId: P.id, ep: P.ep, position: pos, duration: Math.floor(v.duration || 0) } }).catch(() => {});
@@ -397,7 +427,6 @@ async function openPlayer(id, ep) {
     if (!$('#main').querySelector('.det')) vFilm(t, id);
     return appPrompt();
   }
-  if (!S.session) { location.hash = '#/film/' + encodeURIComponent(id); return authModal('login'); }
   if (P.open && P.id === id) return loadEpisode(ep);
   closePlayer(true);
   let fd = S.film[id];
@@ -481,9 +510,9 @@ async function loadEpisode(ep) {
     if (P.ep !== ep || !P.open) return;
     ready0();
     if (e.status === 402) return lockScreen(ep, e.data);
-    if (e.status === 401) { closePlayer(true); return authModal('login'); }
+    if (e.status === 401) return guestLock(ep, e.data);
     if (e.status === 404) return povSet(`<div class="lock"><h3>Episode unavailable</h3><p class="muted">This episode isn't available right now.</p>${P.eps.some(x => x.ep_no === ep + 1) ? `<button class="btn" data-pv="next">Next episode</button>` : ''}<button class="btn sec" data-pv="back">Back to drama</button></div>`);
-    povSet(`<div class="lock"><h3>${e.offline ? 'You are offline' : 'Having trouble playing'}</h3><p class="muted">${e.offline ? 'Reconnect to keep watching.' : 'The video service is busy. Please try again.'}</p><button class="btn" data-pv="retry">Try again</button><button class="btn sec" data-pv="back">Back to drama</button></div>`);
+    povSet(`<div class="lock"><h3>${e.offline ? 'You are offline' : 'Having trouble playing'}</h3><p class="muted">${e.offline ? 'Reconnect to keep watching.' : ((e.data && e.data.message) || 'The video service is busy. Please try again.')}</p><button class="btn" data-pv="retry">Try again</button><button class="btn sec" data-pv="back">Back to drama</button></div>`);
   }
 }
 const ready0 = () => { $('#pv')?.classList.remove('loading'); $('#lsp')?.classList.add('hide'); };
@@ -536,6 +565,13 @@ async function refreshSource() {
 function endScreen() {
   povSet(`<div class="lock"><h3>That's the last episode</h3><p class="muted">More dramas are waiting for you.</p><button class="btn" data-pv="more">Browse dramas</button><button class="btn sec" data-pv="back">Back to drama</button></div>`);
 }
+// A visitor who is not logged in reached a premium episode: the free ones played, now ask them to sign up.
+function guestLock(ep, d) {
+  d = d || {};
+  povSet(`<div class="lock"><div class="lk2">${ic('lock')}</div><h3>Sign up to keep watching</h3>
+    <p class="muted">Episode ${ep} ${d.vipOnly ? 'is for VIP members' : 'is a premium episode'}. Create a free account to unlock it, or log in if you already have one.</p>
+    <button class="btn" data-pv="signup">Create free account</button><button class="btn sec" data-pv="login">Log in</button><button class="btn sec" data-pv="eps">Choose another episode</button></div>`);
+}
 function lockScreen(ep, d) {
   d = d || {};
   const vipOnly = d.vipOnly;
@@ -560,6 +596,8 @@ document.addEventListener('click', async e => {
   else if (a === 'more') { closePlayer(true); location.hash = '#/discover'; }
   else if (a === 'next') loadEpisode(P.ep + 1);
   else if (a === 'retry') loadEpisode(P.ep);
+  else if (a === 'signup') authModal('register');
+  else if (a === 'login') authModal('login');
   else if (a === 'eps') epSheet();
   else if (a === 'vip') { S.afterPay = async () => { await refreshEps(); loadEpisode(P.ep); }; vipSheet(); }
   else if (a === 'unlock') {
@@ -693,6 +731,7 @@ async function downloadEpisode() {
   let d;
   try { d = await api('/play', { method: 'POST', body: { filmId: id, ep, download: true } }); }
   catch (e) {
+    if (e.status === 401) return authModal('login');
     if (e.status === 403) return modal(`<h3>VIP Monthly feature</h3><p class="muted">Downloads are for VIP Monthly members.</p><button class="btn gold block" data-act="vip">${ic('crown')} Go VIP</button>`);
     if (e.status === 402) return toast('Unlock this episode first');
     return toast((e.data && e.data.message) || netMsg(e));
@@ -792,7 +831,8 @@ async function boot() {
   try { S.cfg = await api('/public-config', { auth: false }); try { localStorage.setItem('vuta_cfg', JSON.stringify(S.cfg)); } catch {} }
   catch (e) { try { S.cfg = JSON.parse(localStorage.getItem('vuta_cfg') || 'null'); } catch {} if (!S.cfg) { $('#main').innerHTML = errView(netMsg(e)); return; } }
   document.title = (S.cfg.siteName || 'VUTA') + ' – Short Dramas';
-  S.sb = supabase.createClient(S.cfg.supabaseUrl, S.cfg.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true } });
+  S.sb = supabase.createClient(S.cfg.supabaseUrl, S.cfg.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: !NATIVE, flowType: NATIVE ? 'pkce' : 'implicit' } });
+  wireAuthReturn();
   const { data } = await S.sb.auth.getSession(); S.session = data.session;
   S.sb.auth.onAuthStateChange(async (ev, session) => {
     const was = !!S.session; S.session = session;
