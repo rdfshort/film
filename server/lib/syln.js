@@ -72,7 +72,7 @@ const fill = (tpl, vars) => tpl.replace(/\{(\w+)\}/g, (_, k) => encodeURICompone
 
 // ── daily request budget (protects a free plan such as 100 requests/day) ──
 let budgetDay = '', budgetUsed = 0, budgetLoaded = false;
-async function takeBudget() {
+async function takeBudget(low = false) {
   if (!cfg.dailyBudget) return;
   const day = new Date().toISOString().slice(0, 10);
   if (day !== budgetDay) { budgetDay = day; budgetUsed = 0; budgetLoaded = false; }
@@ -81,7 +81,9 @@ async function takeBudget() {
     const { count } = await db.from('api_logs').select('id', { count: 'exact', head: true }).gte('ts', day + 'T00:00:00Z').gt('status', 0);
     budgetUsed = Math.max(budgetUsed, count || 0);
   }
-  if (budgetUsed >= cfg.dailyBudget) throw new SylnError('Daily Syln request budget used up', 503, 'quota');
+  // Catalogue syncs, searches and poster refreshes ("low") may only use 40% of the day, so playback always keeps a reserve.
+  const cap = low ? Math.floor(cfg.dailyBudget * 0.4) : cfg.dailyBudget;
+  if (budgetUsed >= cap) throw new SylnError(low ? 'Daily limit for catalogue refreshes reached (the rest is kept for playback)' : 'Daily Syln request budget used up', 503, 'quota');
   budgetUsed++;
 }
 
@@ -106,7 +108,7 @@ class SylnError extends Error {
   constructor(msg, status, code) { super(msg); this.status = status; this.code = code; }
 }
 
-async function call(path, query = {}, { retries = 2 } = {}) {
+async function call(path, query = {}, { retries = 2, low = false } = {}) {
   if (!cfg.token) throw new SylnError('Syln API token is not configured', 503, 'no_token');
   const url = new URL(cfg.base + path);
   if (cfg.lang && cfg.params.lang && !url.searchParams.has(cfg.params.lang)) url.searchParams.set(cfg.params.lang, cfg.lang);
@@ -114,7 +116,7 @@ async function call(path, query = {}, { retries = 2 } = {}) {
   const headers = { Accept: 'application/json', [cfg.header]: cfg.scheme ? `${cfg.scheme} ${cfg.token}` : cfg.token };
 
   for (let attempt = 0; ; attempt++) {
-    await takeBudget();
+    await takeBudget(low);
     await slot();
     const t0 = Date.now(), ac = new AbortController(), timer = setTimeout(() => ac.abort(), cfg.timeout);
     try {
@@ -221,7 +223,7 @@ async function listPlatforms() {
   // Providers whose platform is part of the URL (e.g. apishort: /v1/shortmax/...) have no platforms endpoint.
   if (!cfg.paths.platforms) { const l = cfg.platforms.length ? cfg.platforms : [cfg.defaultPlatform || 'default']; return l.map(x => ({ id: x, name: x })); }
   return cachedFresh('syln:platforms', 10 * 60_000, async () => {
-    const j = await call(cfg.paths.platforms);
+    const j = await call(cfg.paths.platforms, {}, { low: true });
     return toList(j).map(p => typeof p === 'string' ? { id: p, name: p } : { id: String(pick(p, FIELD_MAP.platform.id)), name: String(pick(p, FIELD_MAP.platform.name) || pick(p, FIELD_MAP.platform.id)) });
   });
 }
@@ -236,7 +238,7 @@ async function listCatalog({ platform, page = 1, genre } = {}) {
   platform = platform || await defaultPlatform();
   const key = `syln:cat:${platform}:${page}:${genre || ''}`;
   return cachedFresh(key, 10 * 60_000, async () => {
-    const j = await call(fill(cfg.paths.catalog, { platform }), { [cfg.params.page]: page, [cfg.params.genre]: genre });
+    const j = await call(fill(cfg.paths.catalog, { platform }), { [cfg.params.page]: page, [cfg.params.genre]: genre }, { low: true });
     return toList(j).map(r => normFilm(r, platform)).filter(Boolean);
   });
 }
@@ -248,30 +250,33 @@ async function searchAll(q) {
 async function search(q, { platform, page = 1 } = {}) {
   platform = platform || await defaultPlatform();
   return cachedFresh(`syln:s:${platform}:${q.toLowerCase()}:${page}`, 5 * 60_000, async () => {
-    const j = await call(fill(cfg.paths.search, { platform }), { [cfg.params.q]: q, [cfg.params.page]: page });
+    const j = await call(fill(cfg.paths.search, { platform }), { [cfg.params.q]: q, [cfg.params.page]: page }, { low: true });
     return toList(j).map(r => normFilm(r, platform)).filter(Boolean);
   });
 }
 async function getFilm(fullId, platform) {
   const sp = splitId(fullId, platform); platform = sp.platform || await defaultPlatform(); const id = sp.code;
   return cachedFresh(`syln:film:${platform}:${id}`, 30 * 60_000, async () => {
-    const j = await call(fill(cfg.paths.film, { platform, id }));
+    const j = await call(fill(cfg.paths.film, { platform, id }), {}, { low: true });
     const raw = j && j.data && !Array.isArray(j.data) && typeof j.data === 'object' ? j.data : j;
     return normFilm(raw, platform);
   });
 }
 // One cached provider call feeds both the episode list and playback (the list carries the stream links).
 // Held in memory only, never stored in the database and never sent to browsers except per authorised episode.
-const episodesRaw = (platform, id) => cachedFresh(`syln:eps-raw:${platform}:${id}`, 30 * 60_000, async () => {
-  const list = toList(await call(fill(cfg.paths.episodes, { platform, id })));
+// One request returns every episode link of a drama, and the links stay valid ~8 hours, so keep them 5 hours:
+// every viewer of that drama shares that single request.
+const episodesRaw = (platform, id, low = false) => cachedFresh(`syln:eps-raw:${platform}:${id}`, 5 * 3600_000, async () => {
+  const list = toList(await call(fill(cfg.paths.episodes, { platform, id }), {}, { low }));
   adoptCover(platform, id, list); // the episode data carries a fresh cover link: save it permanently
   return list;
 });
+
 async function getEpisodes(fullId, platform) {
   const sp = splitId(fullId, platform); platform = sp.platform || await defaultPlatform(); const id = sp.code;
   return (await episodesRaw(platform, id)).map(normEpisode).sort((a, b) => a.ep_no - b.ep_no);
 }
-// Playback URLs are signed and expire: never cached, always requested fresh when an episode opens.
+
 async function getPlayback(fullId, epRef, platform) {
   const sp = splitId(fullId, platform); platform = sp.platform || await defaultPlatform(); const id = sp.code;
   const ref = typeof epRef === 'object' ? epRef : { no: Number(epRef), id: null };
@@ -281,7 +286,7 @@ async function getPlayback(fullId, epRef, platform) {
     p = normPlay(j);
   } else {
     // No dedicated playback endpoint: the episode list carries the stream links. One call serves every
-    // episode of that drama for 30 minutes (saves quota); links last hours, are never stored and never sent to the browser
+    // episode of that drama for hours (saves quota); links last hours, are never stored and never sent to the browser
     // except for the one episode the viewer is authorised to watch.
     const find = async () => {
       const list = (await episodesRaw(platform, id)).map((r, i) => ({ no: normEpisode(r, i).ep_no, id: pick(r, FIELD_MAP.episode.id), play: normPlay(r) }));
@@ -301,12 +306,11 @@ async function getPlayback(fullId, epRef, platform) {
 async function ping() {
   const t0 = Date.now();
   try {
-    if (cfg.paths.ping) { const pl = await defaultPlatform(); await call(fill(cfg.paths.ping, { platform: pl }), {}, { retries: 0 }); return { ok: true, ms: Date.now() - t0, platforms: 1, tokenConfigured: !!cfg.token }; }
+    if (cfg.paths.ping) { const pl = await defaultPlatform(); await call(fill(cfg.paths.ping, { platform: pl }), {}, { retries: 0, low: true }); return { ok: true, ms: Date.now() - t0, platforms: 1, tokenConfigured: !!cfg.token }; }
     const p = await listPlatforms(); return { ok: true, ms: Date.now() - t0, platforms: p.length, tokenConfigured: !!cfg.token };
   }
   catch (e) { return { ok: false, ms: Date.now() - t0, error: e.message, tokenConfigured: !!cfg.token }; }
 }
-
 
 // ── poster mirroring ─────────────────────────────────────────────────────────────────────────────
 // The provider's cover links are signed and stop working after ~8 hours. We copy each cover once, while its link is
@@ -371,7 +375,7 @@ async function refreshPosters(n = 20) {
   let tried = 0, failed = 0, firstErr = '';
   for (const f of todo) {
     const sp = splitId(f.id);
-    try { tried++; await episodesRaw(sp.platform, sp.code); }
+    try { tried++; await episodesRaw(sp.platform, sp.code, true); }
     catch (e) { failed++; firstErr = firstErr || e.message; if (/budget|limit/i.test(e.message)) break; }
   }
   await new Promise(r => setTimeout(r, 800)); // let the background copies finish
