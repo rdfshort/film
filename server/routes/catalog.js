@@ -17,7 +17,7 @@ async function maybeSync() {
   if (Date.now() - lastKick < 10 * 60_000) return;
   lastKick = Date.now();
   const { data } = await db.from('films').select('fetched_at').order('fetched_at', { ascending: false }).limit(1);
-  const stale = !data?.length || Date.now() - new Date(data[0].fetched_at).getTime() > 6 * 3600_000;
+  const stale = !data?.length || Date.now() - new Date(data[0].fetched_at).getTime() > 24 * 3600_000;
   if (stale) syln.syncCatalogue({ pages: 3 }).catch(e => console.warn('[sync]', e.message));
 }
 
@@ -33,6 +33,7 @@ router.get('/public-config', wrap(async (_req, res) => {
     siteName: s.site_name || 'VUTA', paymentMethods: s.payment_methods || {},
     country: (() => { const k = String(_req.headers['cf-ipcountry'] || '').toUpperCase(); return /^[A-Z]{2}$/.test(k) && k !== 'XX' && k !== 'T1' ? k : ''; })(),
     usdRate: Number(process.env.USD_RATE) || 130,
+    googleLogin: process.env.GOOGLE_LOGIN === 'true',
     webPlayback: process.env.WEB_PLAYBACK === 'true',
     imageProxy: process.env.IMAGE_PROXY || '',
     storeBillingRequired: process.env.NATIVE_STORE_BILLING === 'true',
@@ -103,7 +104,6 @@ router.get('/films/:id', wrap(async (req, res) => {
   const ok = await syln.ensureFilm(id);
   const { data: film } = await db.from('films').select('*').eq('id', id).eq('hidden', false).maybeSingle();
   if (!ok || !film) return res.status(404).json({ error: 'not_found' });
-  syln.warmEpisodes(id, film.platform);
   const { data: eps } = await db.from('episodes').select('ep_no,title,duration_sec,is_free,coin_price').eq('film_id', id).eq('hidden', false).order('ep_no');
   const episodes = await annotateEpisodes(req.user, film, eps || []);
   db.from('films').update({ views: (film.views || 0) + 1 }).eq('id', id).then(() => {}, () => {});
