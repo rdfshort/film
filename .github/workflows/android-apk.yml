@@ -48,6 +48,33 @@ jobs:
           sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <application#' $M
           sed -i 's#</application>#    <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_notify" />\n    </application>#' $M
 
+      - name: Add AdMob app id
+        env:
+          ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
+        run: |
+          ID="${ADMOB_APP_ID:-ca-app-pub-3940256099942544~3347511713}"
+          M=mobile/android/app/src/main/AndroidManifest.xml
+          sed -i "s#</application>#    <meta-data android:name=\"com.google.android.gms.ads.APPLICATION_ID\" android:value=\"$ID\" />\n    </application>#" $M
+          grep -c APPLICATION_ID $M
+
+      - name: Allow Google sign-in to return to the app
+        run: |
+          python3 - <<'PY'
+          p = 'mobile/android/app/src/main/AndroidManifest.xml'
+          s = open(p).read()
+          f = '''
+              <intent-filter>
+                  <action android:name="android.intent.action.VIEW" />
+                  <category android:name="android.intent.category.DEFAULT" />
+                  <category android:name="android.intent.category.BROWSABLE" />
+                  <data android:scheme="com.reeldramafilm.app" android:host="auth-callback" />
+              </intent-filter>
+          '''
+          if 'auth-callback' not in s:
+              s = s.replace('</activity>', f + '</activity>', 1)
+          open(p, 'w').write(s)
+          PY
+
       - name: Apply the app logo
         run: |
           RES=mobile/android/app/src/main/res
