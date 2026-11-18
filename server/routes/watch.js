@@ -39,8 +39,11 @@ router.post('/play', optionalAuth, wrap(async (req, res) => {
       db.from('episodes').select('ep_no').eq('film_id', filmId).eq('hidden', false).gt('ep_no', ep).order('ep_no').limit(1),
       req.user ? db.from('watch_history').select('position_sec').eq('user_id', req.user.id).eq('film_id', filmId).eq('ep_no', ep).maybeSingle() : Promise.resolve({ data: null }),
     ]);
+    // Ad-free: admins and VIP Monthly only. Weekly VIP, free episodes and coin-unlocked episodes show ads.
+    const adFree = req.user ? (dl || await downloadRights(req.user)).ok === true : false;
     res.set('Cache-Control', 'no-store');
     res.json({
+      adFree,
       url: p.url, type: /\.m3u8(\?|$)/i.test(p.url) ? 'hls' : 'file',
       subtitles: p.subtitles?.length ? p.subtitles : (episode.subtitles || []).filter(s => s.url).map(s => ({ lang: s.lang || 'en', label: s.label || 'Subtitles', url: s.url })),
       expiresIn: p.expires_in, nextEp: next?.[0]?.ep_no || null, resumeAt: hist?.position_sec || 0,
