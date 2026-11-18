@@ -404,7 +404,8 @@ function closePlayer(silent) {
   if (document.fullscreenElement) document.exitFullscreen?.();
   $('#player')?.remove(); P.open = false;
   window.removeEventListener('beforeunload', guard);
-  if (!silent) { const id = P.id; location.hash = '#/film/' + encodeURIComponent(id); }
+  const fromDl = window.__fromDl; if (silent) window.__fromDl = 0;
+  if (!silent) { const id = P.id; window.__fromDl = 0; location.hash = fromDl ? '#/library?tab=downloads' : '#/film/' + encodeURIComponent(id); }
 }
 const guard = e => { const v = $('#vid'); if (v && !v.paused) { e.preventDefault(); e.returnValue = ''; } };
 
@@ -787,9 +788,9 @@ async function exportEpisode(d) {
 }
 
 function dlHtml() {
-  const l = dlAll().sort((a, b) => b.at - a.at);
+  const l = dlAll().sort((a, b) => String(a.filmTitle || '').localeCompare(String(b.filmTitle || '')) || String(a.id).localeCompare(String(b.id)) || a.ep - b.ep); // by drama, episodes 1,2,3…
   if (!l.length) return `<div class="empty"><p>No downloads yet. Open an episode and tap the download button.</p></div>`;
-  return `<div class="box">${l.map(u => `<div class="li"><a href="#/watch/${encodeURIComponent(u.id)}/${u.ep}" style="flex:1;color:inherit;text-decoration:none">${esc(u.filmTitle)}<div class="muted small">Episode ${u.ep}${dlExpired(u) ? ' · expired' : ''}</div></a>${S.me && S.me.role === 'admin' && u.type === 'hls' ? `<button class="btn sm sec" data-dlexp="${esc(u.id)}|${u.ep}" style="margin-right:6px">Export</button>` : ''}<button class="btn sm sec" data-dldel="${esc(u.id)}|${u.ep}">Remove</button></div>`).join('')}</div>`;
+  return `<div class="box">${l.map(u => `<div class="li"><a href="#/watch/${encodeURIComponent(u.id)}/${u.ep}" onclick="window.__fromDl=1" style="flex:1;color:inherit;text-decoration:none">${esc(u.filmTitle)}<div class="muted small">Episode ${u.ep}${dlExpired(u) ? ' · expired' : ''}</div></a>${S.me && S.me.role === 'admin' && u.type === 'hls' ? `<button class="btn sm sec" data-dlexp="${esc(u.id)}|${u.ep}" style="margin-right:6px">Export</button>` : ''}<button class="btn sm sec" data-dldel="${esc(u.id)}|${u.ep}">Remove</button></div>`).join('')}</div>`;
 }
 
 /* ───────── notifications: inbox bell + phone push ───────── */
@@ -843,6 +844,15 @@ async function boot() {
   refreshBell(); initPush();
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBell(); });
   window.addEventListener('hashchange', route);
+  { // phone Back button: step back inside the app; only leave the app from the home screen
+    const A = NATIVE && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
+    if (A) A.addListener('backButton', () => {
+      if (P.open) return closePlayer();
+      if (document.querySelector('.modal, .overlay')) { const x = document.querySelector('.modal [data-close], .overlay [data-close]'); if (x) return x.click(); }
+      const v = parse().parts[0] || 'home';
+      if (v === 'home') A.exitApp(); else if (v === 'library' && /tab=downloads/.test(location.hash) && navigator.onLine === false) A.exitApp(); else history.length > 1 ? history.back() : (location.hash = '#/home');
+    });
+  }
   if (navigator.onLine === false && FSP() && !location.hash) location.hash = '#/library?tab=downloads';
   window.addEventListener('offline', () => toast('You are offline'));
   window.addEventListener('online', () => toast('Back online'));
