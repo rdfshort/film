@@ -471,8 +471,7 @@ function wirePlayer() {
   });
   v.addEventListener('ended', () => { saveProgress(true); if (P.next) loadEpisode(P.next); else endScreen(); });
   v.addEventListener('error', () => { if (!P.lastErr) P.lastErr = 'video element error ' + (v.error ? v.error.code + ' ' + (v.error.message || '') : ''); console.error('[player] video error', v.error);
-    if (P.nativeTried && !P.forceHls && window.Hls && Hls.isSupported()) { P.forceHls = true; P.nativeTried = false; return attach(P.curUrl, P.curType, P.curSubs); }
-    refreshSource(); });
+        refreshSource(); });
   const bar = $('#bar');
   const seek = e => { const r = bar.getBoundingClientRect(); const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left; if (v.duration) v.currentTime = Math.min(1, Math.max(0, x / r.width)) * v.duration; };
   let drag = false;
@@ -531,15 +530,15 @@ function attach(url, type, subs) {
   const nativeHls = type === 'hls' && !!v.canPlayType('application/vnd.apple.mpegurl');
   P.curUrl = url; P.curType = type; P.curSubs = subs; P.nativeTried = false;
   // Phones that can play HLS themselves go straight to their own fast player; hls.js is only the fallback.
-  if (type === 'hls' && window.Hls && Hls.isSupported() && !(nativeHls && !P.forceHls)) {
+  if (type === 'hls' && window.Hls && Hls.isSupported() && !(nativeHls && P.forceNative)) {
     // When the phone can play HLS itself we have a fallback, so hls.js must fail FAST instead of retrying for ~a minute.
-    const fast = nativeHls ? { manifestLoadingMaxRetry: 0, manifestLoadingTimeOut: 6000, levelLoadingMaxRetry: 0, levelLoadingTimeOut: 6000, fragLoadingMaxRetry: 1, fragLoadingTimeOut: 8000 } : {};
+    const fast = nativeHls ? { manifestLoadingMaxRetry: 0, manifestLoadingTimeOut: 4000, levelLoadingMaxRetry: 0, levelLoadingTimeOut: 4000, fragLoadingMaxRetry: 1, fragLoadingTimeOut: 8000 } : {};
     P.hls = new Hls({ maxBufferLength: 20, startLevel: -1, capLevelToPlayerSize: true, enableWorker: true, ...fast });
     P.hls.on(Hls.Events.ERROR, (_e, d) => {
       if (!d.fatal) return;
       P.lastErr = `${d.type} / ${d.details}${d.response ? ' / HTTP ' + d.response.code : ''}`;
       console.error('[player] fatal HLS error', d);
-      if (false) { // hls.js could not fetch it: let the browser's own HLS player try once
+      if (nativeHls && !P.forceNative) { // hls.js could not fetch it: let the browser's own HLS player try once
         P.forceNative = true; P.hls.destroy(); P.hls = null; console.info('[player] retrying with the browser\'s built-in HLS');
         return attach(url, type, subs);
       }
