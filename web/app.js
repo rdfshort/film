@@ -506,7 +506,7 @@ async function loadEpisode(ep) {
   try {
     const d = await api('/play', { method: 'POST', body: { filmId: P.id, ep } });
     if (P.ep !== ep || !P.open) return;
-    if (d.access === 'free') { await maybeAd(); if (P.ep !== ep || !P.open) return; } // ads only on free episodes: VIP, unlocked and admin watch ad-free
+    if (!d.adFree) { await maybeAd(); if (P.ep !== ep || !P.open) return; } // every viewer sees ads except admins and VIP Monthly
     P.access = true; P.next = d.nextEp; P.resumeAt = d.resumeAt;
     attach(d.url, d.type, d.subtitles);
   } catch (e) {
