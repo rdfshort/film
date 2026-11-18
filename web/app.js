@@ -528,7 +528,9 @@ function attach(url, type, subs) {
   // Browsers that can play HLS themselves (Safari, Chrome on Android) load a plain <video src> without hls.js.
   const nativeHls = type === 'hls' && !!v.canPlayType('application/vnd.apple.mpegurl');
   if (type === 'hls' && window.Hls && Hls.isSupported() && !(nativeHls && P.forceNative)) {
-    P.hls = new Hls({ maxBufferLength: 20, startLevel: -1, capLevelToPlayerSize: true, enableWorker: true });
+    // When the phone can play HLS itself we have a fallback, so hls.js must fail FAST instead of retrying for ~a minute.
+    const fast = nativeHls ? { manifestLoadingMaxRetry: 0, manifestLoadingTimeOut: 6000, levelLoadingMaxRetry: 0, levelLoadingTimeOut: 6000, fragLoadingMaxRetry: 1, fragLoadingTimeOut: 8000 } : {};
+    P.hls = new Hls({ maxBufferLength: 20, startLevel: -1, capLevelToPlayerSize: true, enableWorker: true, ...fast });
     P.hls.on(Hls.Events.ERROR, (_e, d) => {
       if (!d.fatal) return;
       P.lastErr = `${d.type} / ${d.details}${d.response ? ' / HTTP ' + d.response.code : ''}`;
