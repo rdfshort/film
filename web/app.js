@@ -333,7 +333,7 @@ async function vLibrary(t, q) {
     }
     if (t === tok) {
       $('#lib').innerHTML = html;
-      if (tab === 'downloads') $('#lib').onclick = async e => { const x = e.target.closest('[data-dlexp]'); if (x) { const [xi, xe] = x.dataset.dlexp.split('|'); const xd = dlGet(xi, +xe); if (xd) exportEpisode(xd); return; } const b = e.target.closest('[data-dldel]'); if (!b) return; const [id, ep] = b.dataset.dldel.split('|'); const d = dlGet(id, +ep); if (d) { await dlRemove(d); $('#lib').innerHTML = dlHtml(); toast('Removed'); } };
+      if (tab === 'downloads') $('#lib').onclick = async e => { const xa = e.target.closest('[data-dlexpall]'); if (xa) { const w = xa.dataset.dlexpall; return exportEpisodes(dlAll().filter(u => w === '*' || u.id === w).sort((p, q) => String(p.id).localeCompare(String(q.id)) || p.ep - q.ep)); } const x = e.target.closest('[data-dlexp]'); if (x) { const [xi, xe] = x.dataset.dlexp.split('|'); const xd = dlGet(xi, +xe); if (xd) exportEpisode(xd); return; } const b = e.target.closest('[data-dldel]'); if (!b) return; const [id, ep] = b.dataset.dldel.split('|'); const d = dlGet(id, +ep); if (d) { await dlRemove(d); $('#lib').innerHTML = dlHtml(); toast('Removed'); } };
     }
   } catch (e) { if (t === tok) $('#lib').innerHTML = errView(netMsg(e)); }
 }
@@ -506,6 +506,7 @@ async function loadEpisode(ep) {
   try {
     const d = await api('/play', { method: 'POST', body: { filmId: P.id, ep } });
     if (P.ep !== ep || !P.open) return;
+    if (d.access === 'free') { await maybeAd(); if (P.ep !== ep || !P.open) return; } // ads only on free episodes: VIP, unlocked and admin watch ad-free
     P.access = true; P.next = d.nextEp; P.resumeAt = d.resumeAt;
     attach(d.url, d.type, d.subtitles);
   } catch (e) {
@@ -518,6 +519,32 @@ async function loadEpisode(ep) {
   }
 }
 const ready0 = () => { $('#pv')?.classList.remove('loading'); $('#lsp')?.classList.add('hide'); };
+
+// Interstitial ad (Android app only, free episodes only). It must NEVER block playback: any problem = skip the ad.
+let adN = 0, adReady = false, adInit = false;
+function adPlugin() { const C = window.Capacitor; return NATIVE && C && C.Plugins && C.Plugins.AdMob; }
+async function prepAd() {
+  const A = adPlugin(), c = S.cfg && S.cfg.ads; if (!A || !c || !c.enabled) return;
+  try {
+    if (!adInit) { await A.initialize({ initializeForTesting: !!c.testing }); adInit = true; }
+    await A.prepareInterstitial({ adId: c.interstitialId, isTesting: !!c.testing }); adReady = true;
+  } catch (e) { adReady = false; console.warn('[ads] prepare', e); }
+}
+async function maybeAd() {
+  const A = adPlugin(), c = S.cfg && S.cfg.ads; if (!A || !c || !c.enabled) return;
+  if (++adN % c.every !== 1 && c.every > 1) return; // show on the 1st, then every Nth free episode
+  if (!adReady) await Promise.race([prepAd(), new Promise(r => setTimeout(r, 4000))]);
+  if (!adReady) return;
+  adReady = false; ready0();
+  try {
+    await Promise.race([new Promise(async res => {
+      const hs = [];
+      for (const ev of ['interstitialAdDismissed', 'interstitialAdFailedToShow']) { try { hs.push(await A.addListener(ev, () => res())); } catch {} }
+      try { await A.showInterstitial(); } catch { res(); }
+    }), new Promise(r => setTimeout(r, 60000))]);
+  } catch {}
+  setTimeout(prepAd, 500); // load the next one in the background
+}
 
 function attach(url, type, subs) {
   const v = $('#vid'); if (!v) return;
@@ -764,38 +791,55 @@ async function downloadEpisode() {
 
 
 // Admin only: join a downloaded episode's pieces into one file and hand it to the phone's share sheet ("Save to Files", Drive, etc.).
-async function exportEpisode(d) {
+async function exportEpisode(d) { return exportEpisodes([d]); }
+// Admin: build one video file per episode, then hand them ALL to the phone's share sheet in a single go.
+async function exportEpisodes(list) {
   const F = FSP(), SH = window.Capacitor && window.Capacitor.Plugins && window.Capacitor.Plugins.Share;
   if (!F || !SH) return toast('Export needs the latest app version.');
   if (!S.me || S.me.role !== 'admin') return toast('Export is for admins only.');
-  if (d.type !== 'hls') return toast('This download cannot be exported.');
-  toast('Preparing file…');
+  list = list.filter(d => d.type === 'hls');
+  if (!list.length) return toast('Nothing here can be exported.');
+  try { await F.rmdir({ path: 'export', directory: 'CACHE', recursive: true }); } catch {}
+  const uris = []; let skipped = 0;
   try {
-    try { await F.rmdir({ path: 'export', directory: 'CACHE', recursive: true }); } catch {}
-    const pl = (await F.readFile({ path: d.dir + '/' + d.file, directory: 'DATA', encoding: 'utf8' })).data;
-    if (/#EXT-X-KEY:(?!METHOD=NONE)/.test(pl)) return toast('This episode is encrypted and cannot be exported.');
-    const names = [];
-    for (const line of pl.split(/\r?\n/)) {
-      const m = /^#EXT-X-MAP.*URI="([^"]+)"/.exec(line); if (m) names.push(m[1]);
-      else if (line && !line.startsWith('#')) names.push(line.trim());
+    for (let k = 0; k < list.length; k++) {
+      const d = list[k];
+      toast(`Preparing ${k + 1} of ${list.length}…`);
+      const pl = (await F.readFile({ path: d.dir + '/' + d.file, directory: 'DATA', encoding: 'utf8' })).data;
+      if (/#EXT-X-KEY:(?!METHOD=NONE)/.test(pl)) { skipped++; continue; }
+      const names = [];
+      for (const line of pl.split(/\r?\n/)) {
+        const m = /^#EXT-X-MAP.*URI="([^"]+)"/.exec(line); if (m) names.push(m[1]);
+        else if (line && !line.startsWith('#')) names.push(line.trim());
+      }
+      if (!names.length) { skipped++; continue; }
+      const ext = names.some(n => /\.(m4s|mp4)$/i.test(n)) ? 'mp4' : 'ts';
+      const out = 'export/' + dlSafe(d.filmTitle || d.id) + '_ep' + String(d.ep).padStart(2, '0') + '.' + ext;
+      for (let i = 0; i < names.length; i++) {
+        const chunk = await F.readFile({ path: d.dir + '/' + names[i], directory: 'DATA' }); // base64
+        if (i === 0) await F.writeFile({ path: out, data: chunk.data, directory: 'CACHE', recursive: true });
+        else await F.appendFile({ path: out, data: chunk.data, directory: 'CACHE' });
+      }
+      uris.push((await F.getUri({ path: out, directory: 'CACHE' })).uri);
     }
-    if (!names.length) throw new Error('nothing to export');
-    const ext = names.some(n => /\.(m4s|mp4)$/i.test(n)) ? 'mp4' : 'ts';
-    const out = 'export/' + dlSafe(d.filmTitle || d.id) + '_ep' + d.ep + '.' + ext;
-    for (let i = 0; i < names.length; i++) {
-      const chunk = await F.readFile({ path: d.dir + '/' + names[i], directory: 'DATA' }); // base64
-      if (i === 0) await F.writeFile({ path: out, data: chunk.data, directory: 'CACHE', recursive: true });
-      else await F.appendFile({ path: out, data: chunk.data, directory: 'CACHE' });
-    }
-    const { uri } = await F.getUri({ path: out, directory: 'CACHE' });
-    await SH.share({ title: (d.filmTitle || 'Episode') + ' episode ' + d.ep, files: [uri], dialogTitle: 'Save or send the episode' });
+    if (!uris.length) return toast('Nothing could be exported' + (skipped ? ' (encrypted or empty)' : '') + '.');
+    if (skipped) toast(skipped + ' skipped (encrypted or empty)');
+    await SH.share({ title: uris.length + ' episode' + (uris.length > 1 ? 's' : ''), files: uris, dialogTitle: 'Save or send the episodes' });
   } catch (e) { toast('Export failed: ' + errTxt(e)); }
 }
 
 function dlHtml() {
   const l = dlAll().sort((a, b) => String(a.filmTitle || '').localeCompare(String(b.filmTitle || '')) || String(a.id).localeCompare(String(b.id)) || a.ep - b.ep); // by drama, episodes 1,2,3…
   if (!l.length) return `<div class="empty"><p>No downloads yet. Open an episode and tap the download button.</p></div>`;
-  return `<div class="box">${l.map(u => `<div class="li"><a href="#/watch/${encodeURIComponent(u.id)}/${u.ep}" onclick="window.__fromDl=1" style="flex:1;color:inherit;text-decoration:none">${esc(u.filmTitle)}<div class="muted small">Episode ${u.ep}${dlExpired(u) ? ' · expired' : ''}</div></a>${S.me && S.me.role === 'admin' && u.type === 'hls' ? `<button class="btn sm sec" data-dlexp="${esc(u.id)}|${u.ep}" style="margin-right:6px">Export</button>` : ''}<button class="btn sm sec" data-dldel="${esc(u.id)}|${u.ep}">Remove</button></div>`).join('')}</div>`;
+  const adm = S.me && S.me.role === 'admin', n = l.filter(u => u.type === 'hls').length;
+  let last = null, h = adm && n ? `<div style="margin:0 0 10px"><button class="btn sm" data-dlexpall="*">Export all (${n})</button></div>` : '';
+  h += '<div class="box">';
+  for (const u of l) {
+    if (adm && u.id !== last) { const c = l.filter(x => x.id === u.id && x.type === 'hls').length; h += `<div class="li" style="background:rgba(255,255,255,.04)"><b style="flex:1">${esc(u.filmTitle)}</b>${c ? `<button class="btn sm sec" data-dlexpall="${esc(u.id)}">Export drama (${c})</button>` : ''}</div>`; }
+    last = u.id;
+    h += `<div class="li"><a href="#/watch/${encodeURIComponent(u.id)}/${u.ep}" onclick="window.__fromDl=1" style="flex:1;color:inherit;text-decoration:none">${esc(u.filmTitle)}<div class="muted small">Episode ${u.ep}${dlExpired(u) ? ' · expired' : ''}</div></a>${adm && u.type === 'hls' ? `<button class="btn sm sec" data-dlexp="${esc(u.id)}|${u.ep}" style="margin-right:6px">Export</button>` : ''}<button class="btn sm sec" data-dldel="${esc(u.id)}|${u.ep}">Remove</button></div>`;
+  }
+  return h + '</div>';
 }
 
 /* ───────── notifications: inbox bell + phone push ───────── */
