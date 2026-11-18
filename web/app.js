@@ -470,7 +470,9 @@ function wirePlayer() {
     $('#bu').style.width = pct + '%'; $('#bs').style.left = pct + '%'; $('#tm').textContent = `${fmtTime(c)} / ${fmtTime(d)}`;
   });
   v.addEventListener('ended', () => { saveProgress(true); if (P.next) loadEpisode(P.next); else endScreen(); });
-  v.addEventListener('error', () => { if (!P.lastErr) P.lastErr = 'video element error ' + (v.error ? v.error.code + ' ' + (v.error.message || '') : ''); console.error('[player] video error', v.error); refreshSource(); });
+  v.addEventListener('error', () => { if (!P.lastErr) P.lastErr = 'video element error ' + (v.error ? v.error.code + ' ' + (v.error.message || '') : ''); console.error('[player] video error', v.error);
+    if (P.nativeTried && !P.forceHls && window.Hls && Hls.isSupported()) { P.forceHls = true; P.nativeTried = false; return attach(P.curUrl, P.curType, P.curSubs); }
+    refreshSource(); });
   const bar = $('#bar');
   const seek = e => { const r = bar.getBoundingClientRect(); const x = (e.touches ? e.touches[0].clientX : e.clientX) - r.left; if (v.duration) v.currentTime = Math.min(1, Math.max(0, x / r.width)) * v.duration; };
   let drag = false;
@@ -487,7 +489,7 @@ const povSet = html => { const o = $('#pov'); if (o) o.innerHTML = html; };
 async function loadEpisode(ep) {
   const pv = $('#pv'), v = $('#vid'); if (!pv) return;
   saveProgress(true);
-  P.ep = ep; P.access = false; P.retries = 0; P.next = null; P.lastErr = ''; P.forceNative = false;
+  P.ep = ep; P.access = false; P.retries = 0; P.next = null; P.lastErr = ''; P.forceNative = false; P.forceHls = false;
   pv.classList.add('loading'); $('#lsp').classList.remove('hide'); povSet('');
   v.pause(); if (P.hls) { P.hls.destroy(); P.hls = null; }
   v.removeAttribute('src'); v.load();
@@ -527,7 +529,9 @@ function attach(url, type, subs) {
   v.addEventListener('loadedmetadata', start, { once: true });
   // Browsers that can play HLS themselves (Safari, Chrome on Android) load a plain <video src> without hls.js.
   const nativeHls = type === 'hls' && !!v.canPlayType('application/vnd.apple.mpegurl');
-  if (type === 'hls' && window.Hls && Hls.isSupported() && !(nativeHls && P.forceNative)) {
+  P.curUrl = url; P.curType = type; P.curSubs = subs; P.nativeTried = false;
+  // Phones that can play HLS themselves go straight to their own fast player; hls.js is only the fallback.
+  if (type === 'hls' && window.Hls && Hls.isSupported() && !(nativeHls && !P.forceHls)) {
     // When the phone can play HLS itself we have a fallback, so hls.js must fail FAST instead of retrying for ~a minute.
     const fast = nativeHls ? { manifestLoadingMaxRetry: 0, manifestLoadingTimeOut: 6000, levelLoadingMaxRetry: 0, levelLoadingTimeOut: 6000, fragLoadingMaxRetry: 1, fragLoadingTimeOut: 8000 } : {};
     P.hls = new Hls({ maxBufferLength: 20, startLevel: -1, capLevelToPlayerSize: true, enableWorker: true, ...fast });
@@ -535,14 +539,14 @@ function attach(url, type, subs) {
       if (!d.fatal) return;
       P.lastErr = `${d.type} / ${d.details}${d.response ? ' / HTTP ' + d.response.code : ''}`;
       console.error('[player] fatal HLS error', d);
-      if (nativeHls && !P.forceNative) { // hls.js could not fetch it: let the browser's own HLS player try once
+      if (false) { // hls.js could not fetch it: let the browser's own HLS player try once
         P.forceNative = true; P.hls.destroy(); P.hls = null; console.info('[player] retrying with the browser\'s built-in HLS');
         return attach(url, type, subs);
       }
       refreshSource();
     });
     P.hls.loadSource(url); P.hls.attachMedia(v);
-  } else { v.src = url; v.load(); }
+  } else { P.nativeTried = nativeHls && type === 'hls'; v.src = url; v.load(); }
 }
 
 // Signed playback URLs expire: on a playback error, ask the server for a fresh one and resume where we were.
