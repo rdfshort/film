@@ -835,6 +835,15 @@ async function initPush() {
 
 /* ───────── boot ───────── */
 async function boot() {
+  { // phone Back button: step back inside the app; only leave the app from the home screen
+    const C = window.Capacitor, A = NATIVE && C && ((C.Plugins && C.Plugins.App) || (C.registerPlugin && C.registerPlugin('App')));
+    if (A) A.addListener('backButton', () => {
+      if (P.open) return closePlayer();
+      if (document.querySelector('.modal, .overlay')) { const x = document.querySelector('.modal [data-close], .overlay [data-close]'); if (x) return x.click(); }
+      const v = parse().parts[0] || 'home';
+      if (v === 'home') A.exitApp(); else if (v === 'library' && /tab=downloads/.test(location.hash) && navigator.onLine === false) A.exitApp(); else history.length > 1 ? history.back() : (location.hash = '#/home');
+    });
+  }
   try { S.cfg = await api('/public-config', { auth: false }); try { localStorage.setItem('vuta_cfg', JSON.stringify(S.cfg)); } catch {} }
   catch (e) { try { S.cfg = JSON.parse(localStorage.getItem('vuta_cfg') || 'null'); } catch {} if (!S.cfg) { $('#main').innerHTML = errView(netMsg(e)); return; } }
   document.title = (S.cfg.siteName || 'VUTA') + ' – Short Dramas';
@@ -850,15 +859,6 @@ async function boot() {
   refreshBell(); initPush();
   document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshBell(); });
   window.addEventListener('hashchange', route);
-  { // phone Back button: step back inside the app; only leave the app from the home screen
-    const A = NATIVE && window.Capacitor.Plugins && window.Capacitor.Plugins.App;
-    if (A) A.addListener('backButton', () => {
-      if (P.open) return closePlayer();
-      if (document.querySelector('.modal, .overlay')) { const x = document.querySelector('.modal [data-close], .overlay [data-close]'); if (x) return x.click(); }
-      const v = parse().parts[0] || 'home';
-      if (v === 'home') A.exitApp(); else if (v === 'library' && /tab=downloads/.test(location.hash) && navigator.onLine === false) A.exitApp(); else history.length > 1 ? history.back() : (location.hash = '#/home');
-    });
-  }
   if (navigator.onLine === false && FSP() && !location.hash) location.hash = '#/library?tab=downloads';
   window.addEventListener('offline', () => toast('You are offline'));
   window.addEventListener('online', () => toast('Back online'));
