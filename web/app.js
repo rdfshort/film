@@ -135,8 +135,8 @@ function authModal(mode = 'login') {
     try {
       let res;
       if (mode === 'login') res = await S.sb.auth.signInWithPassword({ email, password });
-      else if (mode === 'register') res = await S.sb.auth.signUp({ email, password, options: { data: { display_name: String(f.get('name') || '').trim().slice(0, 40) } } });
-      else res = await S.sb.auth.resetPasswordForEmail(email, { redirectTo: location.origin + location.pathname });
+      else if (mode === 'register') res = await S.sb.auth.signUp({ email, password, options: { data: { display_name: String(f.get('name') || '').trim().slice(0, 40) }, emailRedirectTo: NATIVE ? APP_SCHEME : location.origin + location.pathname } });
+      else res = await S.sb.auth.resetPasswordForEmail(email, { redirectTo: NATIVE ? APP_SCHEME : location.origin + location.pathname });
       if (res.error) throw res.error;
       if (mode === 'forgot') { m.el.innerHTML = '<h3>Check your email</h3><p class="muted">If an account exists for that address, a reset link is on its way.</p><button class="btn block" data-close>OK</button>'; return; }
       if (mode === 'register' && !res.data.session) { m.el.innerHTML = '<h3>Confirm your email</h3><p class="muted">We sent a confirmation link. Open it, then log in.</p><button class="btn block" data-close>OK</button>'; return; }
