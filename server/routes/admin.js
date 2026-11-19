@@ -177,6 +177,36 @@ router.get('/posters', wrap(async (_req, res) => res.json(await syln.posterRepor
 router.post('/posters/refresh', wrap(async (req, res) => res.json(await syln.refreshPosters(clampInt(req.body.n, 1, 60, 20)))));
 router.post('/posters/fix', wrap(async (_req, res) => res.json(await syln.fixPosters())));
 
+// Search the provider for each keyword, save what it finds, and put those dramas into one home-page collection.
+router.post('/import-keywords', wrap(async (req, res) => {
+  const words = [...new Set((Array.isArray(req.body.keywords) ? req.body.keywords : String(req.body.keywords || '').split(','))
+    .map(w => String(w).trim().slice(0, 40)).filter(Boolean))].slice(0, 10);
+  const slug = String(req.body.slug || '').toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40);
+  const title = String(req.body.title || '').trim().slice(0, 60) || slug;
+  if (!words.length || !slug) return res.status(400).json({ error: 'bad_request', message: 'Give at least one keyword and a collection name.' });
+  const found = new Map(); let failed = 0, lastError = '';
+  for (const w of words) {
+    try { for (const f of await syln.search(w)) found.set(f.id, f); }
+    catch (e) { failed++; lastError = e.message; }
+  }
+  const films = [...found.values()];
+  if (films.length) await syln.upsertFilms(films);
+  const ids = films.map(f => f.id);
+  let tagged = 0;
+  for (let i = 0; i < ids.length; i += 100) {
+    const part = ids.slice(i, i + 100);
+    const { data: rows } = await db.from('films').select('id,collections').in('id', part);
+    for (const r of rows || []) {
+      if ((r.collections || []).includes(slug)) continue;
+      const { error } = await db.from('films').update({ collections: [...(r.collections || []), slug] }).eq('id', r.id);
+      if (!error) tagged++;
+    }
+  }
+  const { data: have } = await db.from('collections').select('slug').eq('slug', slug).maybeSingle();
+  if (!have) await db.from('collections').insert({ slug, title, active: true, sort: 10 });
+  res.json({ keywords: words.length, found: films.length, tagged, failed, lastError, slug });
+}));
+
 router.post('/users/:id/coins', wrap(async (req, res) => {
   if (!isUuid(req.params.id)) return res.status(400).json({ error: 'bad_id' });
   const delta = Math.trunc(Number(req.body.delta));
