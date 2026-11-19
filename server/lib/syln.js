@@ -218,6 +218,52 @@ function normPlay(raw) {
 // Film ids are stored as "platform:code" so ids from different platforms never clash.
 const splitId = (id, platform) => { const s = String(id), i = s.indexOf(':'); return i > 0 ? { platform: s.slice(0, i), code: s.slice(i + 1) } : { platform, code: s }; };
 
+// ── GoodShort platform ───────────────────────────────────────────────────────────────────────────
+// GoodShort's endpoints and field names differ from the other platforms, so it has its own small reader.
+// Videos come as plain HLS links (no expiry) from one "batchload" call that lists every episode of a drama.
+const GS = 'goodshort';
+const gsLang = () => env('SYLN_GOODSHORT_LANG', 'en');
+const gsPath = p => (/\/v1$/.test(cfg.base) ? '' : '/v1') + '/' + GS + p;
+function gsDramas(j) { // the home feed is rows of dramas, search is a list: collect every drama object wherever it sits
+  const out = new Map();
+  (function walk(x, depth) {
+    if (!x || typeof x !== 'object' || depth > 8) return;
+    if (Array.isArray(x)) { x.forEach(y => walk(y, depth + 1)); return; }
+    if (x.bookId && x.bookName) {
+      if (x.isComeSoonBook === true || x.scheduledReleaseBook === true) return; // announced but not playable yet
+      const id = String(x.bookId);
+      if (!out.has(id)) out.set(id, {
+        id: `${GS}:${id}`, platform: GS,
+        title: clean(x.bookName).slice(0, 200), description: clean(x.introduction || '').slice(0, 2000),
+        poster_url: x.cover || x.image || null,
+        genres: [].concat(x.labels || x.typeTwoNames || []).map(g => String(g).trim()).filter(Boolean).slice(0, 8),
+        episode_count: Number(x.chapterCount) || 0,
+      });
+      return;
+    }
+    Object.values(x).forEach(y => walk(y, depth + 1));
+  })(j, 0);
+  return [...out.values()];
+}
+const gsBatch = id => cachedFresh(`syln:gs-batch:${id}`, 5 * 3600_000, async () => {
+  const j = await call(gsPath('/batchload/' + encodeURIComponent(id)), { lang: gsLang() }, {});
+  const d = j && j.data;
+  if (!d || !Array.isArray(d.episodes)) throw new SylnError('GoodShort returned no episodes', 404, 'not_found');
+  return d;
+});
+function gsPickVideo(videos) {
+  const target = Number(env('SYLN_QUALITY', 720)) || 720;
+  const opts = (videos || []).filter(v => v && v.filePath).map(v => [parseInt(String(v.type).replace(/\D/g, ''), 10) || 0, v.filePath]);
+  if (!opts.length) return null;
+  opts.sort((a, b) => Math.abs(a[0] - target) - Math.abs(b[0] - target));
+  return opts[0][1];
+}
+// episodes in the shape the rest of this file already understands (number / id / title / url / cover)
+const gsEpisodes = async id => {
+  const d = await gsBatch(id);
+  return d.episodes.map((e, i) => ({ id: e.id, number: (Number(e.index) || i) + 1, title: `Episode ${(Number(e.index) || i) + 1}`, url: gsPickVideo(e.videos), cover: d.cover }));
+};
+
 // ── public API ──
 async function listPlatforms() {
   // Providers whose platform is part of the URL (e.g. apishort: /v1/shortmax/...) have no platforms endpoint.
@@ -237,6 +283,7 @@ async function defaultPlatform() {
 async function listCatalog({ platform, page = 1, genre } = {}) {
   platform = platform || await defaultPlatform();
   const key = `syln:cat:${platform}:${page}:${genre || ''}`;
+  if (platform === GS) return cachedFresh(key, 10 * 60_000, async () => gsDramas(await call(gsPath('/home'), { lang: gsLang(), channel: -1, page, size: 20 }, { low: true })));
   return cachedFresh(key, 10 * 60_000, async () => {
     const j = await call(fill(cfg.paths.catalog, { platform }), { [cfg.params.page]: page, [cfg.params.genre]: genre }, { low: true });
     return toList(j).map(r => normFilm(r, platform)).filter(Boolean);
@@ -249,6 +296,7 @@ async function searchAll(q) {
 }
 async function search(q, { platform, page = 1 } = {}) {
   platform = platform || await defaultPlatform();
+  if (platform === GS) return cachedFresh(`syln:s:${platform}:${q.toLowerCase()}:${page}`, 5 * 60_000, async () => gsDramas(await call(gsPath('/search'), { lang: gsLang(), q, page, size: 15 }, { low: true })));
   return cachedFresh(`syln:s:${platform}:${q.toLowerCase()}:${page}`, 5 * 60_000, async () => {
     const j = await call(fill(cfg.paths.search, { platform }), { [cfg.params.q]: q, [cfg.params.page]: page }, { low: true });
     return toList(j).map(r => normFilm(r, platform)).filter(Boolean);
@@ -256,6 +304,10 @@ async function search(q, { platform, page = 1 } = {}) {
 }
 async function getFilm(fullId, platform) {
   const sp = splitId(fullId, platform); platform = sp.platform || await defaultPlatform(); const id = sp.code;
+  if (platform === GS) return cachedFresh(`syln:film:${platform}:${id}`, 30 * 60_000, async () => {
+    const d = await gsBatch(id); // details come from the episode call: one request instead of two
+    return { id: `${GS}:${id}`, platform: GS, title: clean(d.bookName || 'Untitled').slice(0, 200), description: '', poster_url: d.cover || null, genres: [], episode_count: Number(d.totalEpisode) || d.episodes.length };
+  });
   return cachedFresh(`syln:film:${platform}:${id}`, 30 * 60_000, async () => {
     const j = await call(fill(cfg.paths.film, { platform, id }), {}, { low: true });
     const raw = j && j.data && !Array.isArray(j.data) && typeof j.data === 'object' ? j.data : j;
@@ -267,6 +319,7 @@ async function getFilm(fullId, platform) {
 // One request returns every episode link of a drama, and the links stay valid ~8 hours, so keep them 5 hours:
 // every viewer of that drama shares that single request.
 const episodesRaw = (platform, id, low = false) => cachedFresh(`syln:eps-raw:${platform}:${id}`, 5 * 3600_000, async () => {
+  if (platform === GS) { const l = await gsEpisodes(id); adoptCover(platform, id, l); return l; }
   const list = toList(await call(fill(cfg.paths.episodes, { platform, id }), {}, { low }));
   adoptCover(platform, id, list); // the episode data carries a fresh cover link: save it permanently
   return list;
