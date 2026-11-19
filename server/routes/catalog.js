@@ -68,7 +68,7 @@ router.get('/home', wrap(async (req, res) => {
     }
   }
   const collections = [];
-  for (const c of (colls.data || []).slice(0, 4)) {
+  for (const c of (colls.data || []).slice(0, 8)) {
     const { data } = await vis().contains('collections', [c.slug]).limit(40);
     if (data?.length) collections.push({ ...c, films: mirroredFirst(data).slice(0, 12) });
   }
