@@ -240,13 +240,15 @@ async function pollPayment(ref, m) {
   show('<h3>Still waiting…</h3><p class="muted">We have not received confirmation yet. If you paid, your balance will update automatically within a few minutes.</p><button class="btn block" data-close>Close</button>');
 }
 function buyCoinsSheet() {
-  const m = modal(`<h3>Get coins</h3><p class="muted small">Unlock premium episodes instantly.</p><div class="pk" style="padding:12px 0 0">${S.cfg.packages.map(pkgHtml).join('')}</div>`);
+  const m = modal(`<h3>Get coins</h3><p class="muted small">Unlock premium episodes instantly.</p><div class="pk" style="padding:12px 0 0">${S.cfg.packages.map(pkgHtml).join('')}</div>${adNote()}`);
   m.el.addEventListener('click', e => { const p = e.target.closest('[data-pkg]'); if (p) { m.close(); checkout('coin_purchase', S.cfg.packages.find(x => x.id === p.dataset.pkg)); } });
 }
 function vipSheet() {
   const m = modal(`<h3>${ic('crown')} Go VIP</h3><p class="muted small">Watch eligible premium episodes without spending coins.</p><div style="margin-top:12px">${S.cfg.plans.map(planHtml).join('')}</div>`);
   m.el.addEventListener('click', e => { const p = e.target.closest('[data-plan]'); if (p) { m.close(); checkout('vip', S.cfg.plans.find(x => x.id === p.dataset.plan)); } });
 }
+// Shown with coin purchases in the app: coins open episodes, ads only go away with VIP Monthly.
+const adNote = () => NATIVE && S.cfg && S.cfg.ads && S.cfg.ads.enabled ? '<p class="muted small" style="margin:10px 0 0">Want no ads? VIP Monthly has none.</p>' : '';
 const pkgHtml = p => { const save = p.price_kes < p.coins ? Math.round((1 - p.price_kes / p.coins) * 100) : 0; return `<div class="pkg" data-pkg="${p.id}"><b>${ic('coin')}${Number(p.coins).toLocaleString()}</b><div class="pr">${fmtKes(p.price_kes)}</div>${save ? `<div class="sv">Save ${save}%</div>` : ''}</div>`; };
 // What each plan really gives, shown first: the ad rules are the part viewers care about.
 const planPerks = p => {
@@ -357,7 +359,7 @@ async function vWallet(t, q) {
     : (w.ledger.length ? w.ledger.map(l => `<div class="li"><span style="flex:1;text-transform:capitalize">${esc(l.reason.replace('_', ' '))}<div class="muted small">${fmtDate(l.created_at)}</div></span><b style="color:${l.delta > 0 ? 'var(--ok)' : 'var(--tx)'}">${l.delta > 0 ? '+' : ''}${l.delta}</b></div>`).join('') : '<div class="empty">No coin activity yet.</div>');
   $('#main').innerHTML = topBar() +
     `<div class="bal"><div class="muted small">Coin balance</div><b>${ic('coin')}${Number(w.balance).toLocaleString()}</b>${m.vip ? `<div class="small" style="margin-top:6px;color:var(--gold)">${ic('crown')} VIP until ${fmtDate(m.vip_until)}</div>` : ''}</div>` +
-    `<h2 class="sec">Buy coins</h2><div class="pk">${S.cfg.packages.map(pkgHtml).join('')}</div>` +
+    `<h2 class="sec">Buy coins</h2><div class="pk">${S.cfg.packages.map(pkgHtml).join('')}</div>${adNote()}` +
     (S.cfg.plans.length ? `<h2 class="sec">${ic('crown')}&nbsp;VIP</h2>${S.cfg.plans.map(planHtml).join('')}` : '') +
     `<h2 class="sec">History</h2><div class="tabs">${[['payments', 'Payments'], ['coins', 'Coins']].map(([k, l]) => `<button class="${tab === k ? 'on' : ''}" data-tab="${k}">${l}</button>`).join('')}</div><div class="box">${list}</div>`;
   const main = $('#main');
