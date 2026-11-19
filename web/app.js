@@ -248,7 +248,14 @@ function vipSheet() {
   m.el.addEventListener('click', e => { const p = e.target.closest('[data-plan]'); if (p) { m.close(); checkout('vip', S.cfg.plans.find(x => x.id === p.dataset.plan)); } });
 }
 const pkgHtml = p => { const save = p.price_kes < p.coins ? Math.round((1 - p.price_kes / p.coins) * 100) : 0; return `<div class="pkg" data-pkg="${p.id}"><b>${ic('coin')}${Number(p.coins).toLocaleString()}</b><div class="pr">${fmtKes(p.price_kes)}</div>${save ? `<div class="sv">Save ${save}%</div>` : ''}</div>`; };
-const planHtml = p => `<div class="plan"><div style="flex:1"><b>${esc(p.name)}</b><div class="muted small">${p.days} days</div><ul>${(p.benefits || []).map(b => `<li>${esc(b)}</li>`).join('')}</ul></div><button class="btn gold sm" data-plan="${p.id}">${fmtKes(p.price_kes)}</button></div>`;
+// What each plan really gives, shown first: the ad rules are the part viewers care about.
+const planPerks = p => {
+  const rest = (p.benefits || []).filter(x => !/interruption|ads?\b/i.test(x));
+  if (p.code === 'monthly') return ['No ads at all', 'Offline downloads to your phone'].concat(rest);
+  if (p.code === 'weekly') return ['Free episodes with fewer ads'].concat(rest);
+  return p.benefits || [];
+};
+const planHtml = p => `<div class="plan"><div style="flex:1"><b>${esc(p.name)}</b><div class="muted small">${p.days} days</div><ul>${planPerks(p).map((b, i) => `<li${i < (p.code === 'monthly' ? 2 : p.code === 'weekly' ? 1 : 0) ? ' style="font-weight:700"' : ''}>${esc(b)}</li>`).join('')}</ul></div><button class="btn gold sm" data-plan="${p.id}">${fmtKes(p.price_kes)}</button></div>`;
 
 /* ───────── views ───────── */
 let tok = 0;
@@ -506,7 +513,7 @@ async function loadEpisode(ep) {
   try {
     const d = await api('/play', { method: 'POST', body: { filmId: P.id, ep } });
     if (P.ep !== ep || !P.open) return;
-    if (!d.adFree) { await maybeAd(); if (P.ep !== ep || !P.open) return; } // every viewer sees ads except admins and VIP Monthly
+    if (!d.adFree) { await maybeAd(!!d.adFew); if (P.ep !== ep || !P.open) return; } // every viewer sees ads except admins and VIP Monthly
     P.access = true; P.next = d.nextEp; P.resumeAt = d.resumeAt;
     attach(d.url, d.type, d.subtitles);
   } catch (e) {
@@ -531,10 +538,11 @@ async function prepAd0() {
     await A.prepareInterstitial({ adId: c.interstitialId, isTesting: !!c.testing }); adReady = true;
   } catch (e) { adReady = false; adErr = String((e && (e.message || e.errorMessage)) || JSON.stringify(e)).slice(0, 100); console.warn('[ads] prepare', e); if (c.debug) toast('Ad not loaded: ' + String((e && (e.message || e.errorMessage)) || JSON.stringify(e)).slice(0, 120)); }
 }
-async function maybeAd() {
+async function maybeAd(few) {
   const A = adPlugin(), c = S.cfg && S.cfg.ads; if (!c || !c.enabled) return;
   if (!A) { if (c.debug) toast('Ads: the plugin is missing in this app build'); return; }
-  if (++adN % c.every !== 1 && c.every > 1) return; // show on the 1st, then every Nth free episode
+  const every = c.every * (few ? 3 : 1); // VIP Weekly sees about a third of the ads
+  if (++adN % every !== 1 && every > 1) return; // show on the 1st, then every Nth free episode
   if (!adReady) await Promise.race([prepAd(), new Promise(r => setTimeout(r, 9000))]);
   if (!adReady) { if (c.debug) toast('Ads: no ad was ready' + (adErr ? ' (' + adErr + ')' : ' (still loading)')); return; }
   adReady = false; ready0();
