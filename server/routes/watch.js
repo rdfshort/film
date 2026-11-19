@@ -1,6 +1,6 @@
 const router = require('express').Router();
 const { db, wrap, clampInt, safeId } = require('../lib/core');
-const { optionalAuth, requireAuth } = require('../lib/auth');
+const { optionalAuth, requireAuth, isVip } = require('../lib/auth');
 const syln = require('../lib/syln');
 const { authorize, downloadRights } = require('../lib/access');
 
@@ -43,7 +43,7 @@ router.post('/play', optionalAuth, wrap(async (req, res) => {
     const adFree = req.user ? (dl || await downloadRights(req.user)).ok === true : false;
     res.set('Cache-Control', 'no-store');
     res.json({
-      adFree,
+      adFree, adFew: !adFree && isVip(req.user), // weekly VIP: ads, but a lot fewer
       url: p.url, type: /\.m3u8(\?|$)/i.test(p.url) ? 'hls' : 'file',
       subtitles: p.subtitles?.length ? p.subtitles : (episode.subtitles || []).filter(s => s.url).map(s => ({ lang: s.lang || 'en', label: s.label || 'Subtitles', url: s.url })),
       expiresIn: p.expires_in, nextEp: next?.[0]?.ep_no || null, resumeAt: hist?.position_sec || 0,
