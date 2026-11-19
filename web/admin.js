@@ -42,7 +42,7 @@ async function overview(v) {
 /* ── catalogue ── */
 async function films(v, page = 1, q = '') {
   const d = await api(`/films?page=${page}&q=${encodeURIComponent(q)}`);
-  v.innerHTML = `<div class="box" style="margin:0 0 12px"><div class="frm"><div><label class="small muted">Search</label><input id="fq" value="${esc(q)}" placeholder="Title…"></div><button class="btn sm sec" id="fs">Search</button><button class="btn sm" id="sync">Sync from Syln</button><button class="btn sm sec" id="deep">Deep sync (10 pages)</button><button class="btn sm sec" id="fixp">Fix posters</button><button class="btn sm sec" id="refp">Refresh 20 posters</button></div><p class="small muted" style="margin:8px 0 0">Titles are third-party content provided through the Syln API. Hide anything unavailable or that you are not licensed to show.</p></div>
+  v.innerHTML = `<div class="box" style="margin:0 0 12px"><div class="frm"><div><label class="small muted">Search</label><input id="fq" value="${esc(q)}" placeholder="Title…"></div><button class="btn sm sec" id="fs">Search</button><button class="btn sm" id="sync">Sync from Syln</button><button class="btn sm sec" id="deep">Deep sync (10 pages)</button><button class="btn sm sec" id="fixp">Fix posters</button><button class="btn sm sec" id="refp">Refresh 20 posters</button><button class="btn sm sec" id="impk">Import by keywords</button></div><p class="small muted" style="margin:8px 0 0">Titles are third-party content provided through the Syln API. Hide anything unavailable or that you are not licensed to show.</p></div>
   <div class="tw"><table><tr><th>Drama</th><th>Eps</th><th>Free eps</th><th>Coin price</th><th>Flags</th><th></th></tr>
   ${d.films.map(f => `<tr data-id="${esc(f.id)}"><td style="min-width:160px"><b>${esc(f.title)}</b><div class="muted small">${esc((f.genres || []).join(', '))}</div></td><td>${f.episode_count}</td>
   <td><input class="n" data-k="free_episodes" type="number" min="0" style="width:76px" value="${f.free_episodes ?? ''}" placeholder="global"></td>
@@ -61,6 +61,17 @@ async function films(v, page = 1, q = '') {
     e.target.disabled = true; toast('Refreshing…');
     const r = await api('/posters/refresh', { method: 'POST', body: { n: 20 } });
     alert(`Dramas checked: ${r.tried}` + (r.failed ? `\nFailed: ${r.failed}  (${r.firstErr})` : '') + `\n\nSaved permanently: ${r.mirrored} of ${r.total}\nStill expired: ${r.expired}` + (r.lastError ? `\nLast problem: ${r.lastError}` : ''));
+    films(v, 1, q);
+  });
+  $('#impk').onclick = guard(async e => {
+    const kw = prompt('Keywords to search for, separated by commas.\nExample: dragon, emperor, empress, ancient, immortal, legend');
+    if (!kw) return;
+    const title = prompt('Name of the home-page row for these dramas.\nExample: Ancient & Legends', 'Ancient & Legends');
+    if (!title) return;
+    e.target.disabled = true; toast('Searching… (each keyword uses one provider request)');
+    const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+    const r = await api('/import-keywords', { method: 'POST', body: { keywords: kw, title, slug } });
+    alert(`Import finished\n\nKeywords searched: ${r.keywords}\nDramas found: ${r.found}\nAdded to the row "${title}": ${r.tagged}` + (r.failed ? `\nSearches that failed: ${r.failed}\nLast problem: ${r.lastError}` : ''));
     films(v, 1, q);
   });
   $('#fixp').onclick = guard(async e => {
