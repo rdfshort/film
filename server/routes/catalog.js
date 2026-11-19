@@ -34,7 +34,7 @@ router.get('/public-config', wrap(async (_req, res) => {
     country: (() => { const k = String(_req.headers['cf-ipcountry'] || '').toUpperCase(); return /^[A-Z]{2}$/.test(k) && k !== 'XX' && k !== 'T1' ? k : ''; })(),
     usdRate: Number(process.env.USD_RATE) || 130,
     googleLogin: process.env.GOOGLE_LOGIN === 'true',
-    ads: { enabled: process.env.ADS_ENABLED === 'true', every: Math.max(1, Number(process.env.ADS_EVERY) || 2), interstitialId: process.env.ADMOB_INTERSTITIAL_ID || 'ca-app-pub-3940256099942544/1033173712', testing: !process.env.ADMOB_INTERSTITIAL_ID },
+    ads: (() => { const T = 'ca-app-pub-3940256099942544/1033173712', real = process.env.ADMOB_INTERSTITIAL_ID || '', testing = process.env.ADS_TEST === 'true' || !real; return { enabled: process.env.ADS_ENABLED === 'true', every: Math.max(1, Number(process.env.ADS_EVERY) || 2), interstitialId: testing ? T : real, testing, debug: process.env.ADS_DEBUG === 'true' }; })(),
     webPlayback: process.env.WEB_PLAYBACK === 'true',
     imageProxy: process.env.IMAGE_PROXY || '',
     storeBillingRequired: process.env.NATIVE_STORE_BILLING === 'true',
