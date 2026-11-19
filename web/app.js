@@ -521,21 +521,22 @@ async function loadEpisode(ep) {
 const ready0 = () => { $('#pv')?.classList.remove('loading'); $('#lsp')?.classList.add('hide'); };
 
 // Interstitial ad (Android app only, free episodes only). It must NEVER block playback: any problem = skip the ad.
-let adN = 0, adReady = false, adInit = false;
+let adN = 0, adReady = false, adInit = false, adErr = '', adBusy = null;
 function adPlugin() { const C = window.Capacitor; return NATIVE && C && C.Plugins && C.Plugins.AdMob; }
-async function prepAd() {
+function prepAd() { return adBusy || (adBusy = prepAd0().finally(() => { adBusy = null; })); } // one load at a time
+async function prepAd0() {
   const A = adPlugin(), c = S.cfg && S.cfg.ads; if (!A || !c || !c.enabled) return;
   try {
     if (!adInit) { await A.initialize({ initializeForTesting: !!c.testing }); adInit = true; }
     await A.prepareInterstitial({ adId: c.interstitialId, isTesting: !!c.testing }); adReady = true;
-  } catch (e) { adReady = false; console.warn('[ads] prepare', e); if (c.debug) toast('Ad not loaded: ' + String((e && (e.message || e.errorMessage)) || JSON.stringify(e)).slice(0, 120)); }
+  } catch (e) { adReady = false; adErr = String((e && (e.message || e.errorMessage)) || JSON.stringify(e)).slice(0, 100); console.warn('[ads] prepare', e); if (c.debug) toast('Ad not loaded: ' + String((e && (e.message || e.errorMessage)) || JSON.stringify(e)).slice(0, 120)); }
 }
 async function maybeAd() {
   const A = adPlugin(), c = S.cfg && S.cfg.ads; if (!c || !c.enabled) return;
   if (!A) { if (c.debug) toast('Ads: the plugin is missing in this app build'); return; }
   if (++adN % c.every !== 1 && c.every > 1) return; // show on the 1st, then every Nth free episode
-  if (!adReady) await Promise.race([prepAd(), new Promise(r => setTimeout(r, 4000))]);
-  if (!adReady) { if (c.debug) toast('Ads: no ad was ready'); return; }
+  if (!adReady) await Promise.race([prepAd(), new Promise(r => setTimeout(r, 9000))]);
+  if (!adReady) { if (c.debug) toast('Ads: no ad was ready' + (adErr ? ' (' + adErr + ')' : ' (still loading)')); return; }
   adReady = false; ready0();
   try {
     await Promise.race([new Promise(async res => {
@@ -891,6 +892,7 @@ async function boot() {
   try { S.cfg = await api('/public-config', { auth: false }); try { localStorage.setItem('vuta_cfg', JSON.stringify(S.cfg)); } catch {} }
   catch (e) { try { S.cfg = JSON.parse(localStorage.getItem('vuta_cfg') || 'null'); } catch {} if (!S.cfg) { $('#main').innerHTML = errView(netMsg(e)); return; } }
   document.title = (S.cfg.siteName || 'VUTA') + ' – Short Dramas';
+  if (NATIVE && S.cfg.ads && S.cfg.ads.enabled) setTimeout(prepAd, 1500); // load the first ad while the viewer browses
   S.sb = supabase.createClient(S.cfg.supabaseUrl, S.cfg.supabaseAnonKey, { auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: !NATIVE, flowType: NATIVE ? 'pkce' : 'implicit' } });
   wireAuthReturn();
   const { data } = await S.sb.auth.getSession(); S.session = data.session;
