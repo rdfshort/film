@@ -528,13 +528,14 @@ async function prepAd() {
   try {
     if (!adInit) { await A.initialize({ initializeForTesting: !!c.testing }); adInit = true; }
     await A.prepareInterstitial({ adId: c.interstitialId, isTesting: !!c.testing }); adReady = true;
-  } catch (e) { adReady = false; console.warn('[ads] prepare', e); }
+  } catch (e) { adReady = false; console.warn('[ads] prepare', e); if (c.debug) toast('Ad not loaded: ' + String((e && (e.message || e.errorMessage)) || JSON.stringify(e)).slice(0, 120)); }
 }
 async function maybeAd() {
-  const A = adPlugin(), c = S.cfg && S.cfg.ads; if (!A || !c || !c.enabled) return;
+  const A = adPlugin(), c = S.cfg && S.cfg.ads; if (!c || !c.enabled) return;
+  if (!A) { if (c.debug) toast('Ads: the plugin is missing in this app build'); return; }
   if (++adN % c.every !== 1 && c.every > 1) return; // show on the 1st, then every Nth free episode
   if (!adReady) await Promise.race([prepAd(), new Promise(r => setTimeout(r, 4000))]);
-  if (!adReady) return;
+  if (!adReady) { if (c.debug) toast('Ads: no ad was ready'); return; }
   adReady = false; ready0();
   try {
     await Promise.race([new Promise(async res => {
