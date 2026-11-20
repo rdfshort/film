@@ -264,6 +264,48 @@ const gsEpisodes = async id => {
   return d.episodes.map((e, i) => ({ id: e.id, number: (Number(e.index) || i) + 1, title: `Episode ${(Number(e.index) || i) + 1}`, url: gsPickVideo(e.videos), cover: d.cover }));
 };
 
+// ── FlickReels platform ──────────────────────────────────────────────────────────────────────────
+// Language is a number here (1 = English). Stream links are signed and last only ~40 minutes, so they are cached briefly.
+const FR = 'flickreels';
+const frLang = () => env('SYLN_FLICKREELS_LANG', '1');
+const frPath = p => (/\/v1$/.test(cfg.base) ? '' : '/v1') + '/' + FR + p;
+function frDramas(j) {
+  const out = new Map();
+  (function walk(x, depth) {
+    if (!x || typeof x !== 'object' || depth > 8) return;
+    if (Array.isArray(x)) { x.forEach(y => walk(y, depth + 1)); return; }
+    const id = x.playlet_id, title = x.title || x.playlet_title;
+    if (id && title) {
+      if (x.is_playlet_trailer === true) return;
+      const k = String(id);
+      if (!out.has(k)) out.set(k, {
+        id: `${FR}:${k}`, platform: FR,
+        title: clean(title).slice(0, 200), description: clean(x.introduce || x.description || '').slice(0, 2000),
+        poster_url: x.cover || x.playlet_cover || x.process_cover || null,
+        genres: (x.tag_list || []).map(t => (t && (t.name || t)) + '').map(g => g.trim()).filter(Boolean).slice(0, 8),
+        episode_count: Number(x.upload_num) || 0,
+      });
+      return;
+    }
+    Object.values(x).forEach(y => walk(y, depth + 1));
+  })(j, 0);
+  return [...out.values()];
+}
+const frBatch = id => cachedFresh(`syln:fr-batch:${id}`, 60_000, async () => {
+  const j = await call(frPath('/batchload/' + encodeURIComponent(id)), { lang: frLang() }, {});
+  const d = j && j.data;
+  if (!d || !Array.isArray(d.list)) throw new SylnError('FlickReels returned no episodes', 404, 'not_found');
+  return d;
+});
+const frEpisodes = async id => {
+  const d = await frBatch(id);
+  return d.list.map((e, i) => {
+    const m = /[?&]verify=(\d{9,11})-/.exec(e.hls_url || '');
+    const exp = Math.min(...[Number(e.hls_timeout) || 0, m ? Number(m[1]) : 0].filter(Boolean)) || 0;
+    return { id: e.chapter_id, number: Number(e.chapter_num) || i + 1, title: `Episode ${Number(e.chapter_num) || i + 1}`, duration: e.duration, url: e.hls_url || null, expires: exp, cover: d.cover };
+  });
+};
+
 // ── public API ──
 async function listPlatforms() {
   // Providers whose platform is part of the URL (e.g. apishort: /v1/shortmax/...) have no platforms endpoint.
@@ -283,6 +325,7 @@ async function defaultPlatform() {
 async function listCatalog({ platform, page = 1, genre } = {}) {
   platform = platform || await defaultPlatform();
   const key = `syln:cat:${platform}:${page}:${genre || ''}`;
+  if (platform === FR) return cachedFresh(key, 10 * 60_000, async () => frDramas(await call(frPath('/api/list'), { lang: frLang(), page, page_size: env('SYLN_FLICKREELS_PAGE_SIZE', 12), category_id: 0 }, { low: true })));
   if (platform === GS) return cachedFresh(key, 10 * 60_000, async () => gsDramas(await call(gsPath('/home'), { lang: gsLang(), channel: -1, page, size: 20 }, { low: true })));
   return cachedFresh(key, 10 * 60_000, async () => {
     const j = await call(fill(cfg.paths.catalog, { platform }), { [cfg.params.page]: page, [cfg.params.genre]: genre }, { low: true });
@@ -296,6 +339,7 @@ async function searchAll(q) {
 }
 async function search(q, { platform, page = 1 } = {}) {
   platform = platform || await defaultPlatform();
+  if (platform === FR) return cachedFresh(`syln:s:${platform}:${q.toLowerCase()}:${page}`, 5 * 60_000, async () => frDramas(await call(frPath('/search'), { q, lang: frLang() }, { low: true })));
   if (platform === GS) return cachedFresh(`syln:s:${platform}:${q.toLowerCase()}:${page}`, 5 * 60_000, async () => gsDramas(await call(gsPath('/search'), { lang: gsLang(), q, page, size: 15 }, { low: true })));
   return cachedFresh(`syln:s:${platform}:${q.toLowerCase()}:${page}`, 5 * 60_000, async () => {
     const j = await call(fill(cfg.paths.search, { platform }), { [cfg.params.q]: q, [cfg.params.page]: page }, { low: true });
@@ -304,6 +348,10 @@ async function search(q, { platform, page = 1 } = {}) {
 }
 async function getFilm(fullId, platform) {
   const sp = splitId(fullId, platform); platform = sp.platform || await defaultPlatform(); const id = sp.code;
+  if (platform === FR) return cachedFresh(`syln:film:${platform}:${id}`, 30 * 60_000, async () => {
+    const d = await frBatch(id); // details come from the episode call
+    return { id: `${FR}:${id}`, platform: FR, title: clean(d.title || 'Untitled').slice(0, 200), description: clean(d.introduce || '').slice(0, 2000), poster_url: d.cover || null, genres: [], episode_count: Number(d.upload_num) || d.list.length };
+  });
   if (platform === GS) return cachedFresh(`syln:film:${platform}:${id}`, 30 * 60_000, async () => {
     const d = await gsBatch(id); // details come from the episode call: one request instead of two
     return { id: `${GS}:${id}`, platform: GS, title: clean(d.bookName || 'Untitled').slice(0, 200), description: '', poster_url: d.cover || null, genres: [], episode_count: Number(d.totalEpisode) || d.episodes.length };
@@ -318,7 +366,8 @@ async function getFilm(fullId, platform) {
 // Held in memory only, never stored in the database and never sent to browsers except per authorised episode.
 // One request returns every episode link of a drama, and the links stay valid ~8 hours, so keep them 5 hours:
 // every viewer of that drama shares that single request.
-const episodesRaw = (platform, id, low = false) => cachedFresh(`syln:eps-raw:${platform}:${id}`, 5 * 3600_000, async () => {
+const episodesRaw = (platform, id, low = false) => cachedFresh(`syln:eps-raw:${platform}:${id}`, platform === FR ? 20 * 60_000 : 5 * 3600_000, async () => { // FlickReels links expire in ~40 min
+  if (platform === FR) { const l = await frEpisodes(id); adoptCover(platform, id, l); return l; }
   if (platform === GS) { const l = await gsEpisodes(id); adoptCover(platform, id, l); return l; }
   const list = toList(await call(fill(cfg.paths.episodes, { platform, id }), {}, { low }));
   adoptCover(platform, id, list); // the episode data carries a fresh cover link: save it permanently
@@ -348,7 +397,7 @@ async function getPlayback(fullId, epRef, platform) {
     const dead = x => x.url && x.expires_at && x.expires_at * 1000 < Date.now() + 60_000; // expired, or about to
     p = await find();
     if (dead(p)) { // our cache, or the provider's own cache, held an old link: fetch once more
-      cache.del(`syln:eps-raw:${platform}:${id}`); cache.del(`syln:eps-raw:${platform}:${id}:stale`);
+      cache.del(`syln:eps-raw:${platform}:${id}`); cache.del(`syln:eps-raw:${platform}:${id}:stale`); cache.del(`syln:fr-batch:${id}`); cache.del(`syln:fr-batch:${id}:stale`);
       p = await find();
       if (dead(p)) { logCall('playback', 0, 0, `provider returned an expired link (expired ${new Date(p.expires_at * 1000).toISOString()})`); throw new SylnError('Provider returned an expired stream link', 503, 'stale_link'); }
     }
