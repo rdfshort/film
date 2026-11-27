@@ -48,6 +48,15 @@ jobs:
           sed -i 's#<application#<uses-permission android:name="android.permission.POST_NOTIFICATIONS" />\n    <application#' $M
           sed -i 's#</application>#    <meta-data android:name="com.google.firebase.messaging.default_notification_icon" android:resource="@drawable/ic_stat_notify" />\n    </application>#' $M
 
+      - name: Add Start.io ads plugin
+        run: |
+          D=mobile/android/app/src/main/java/com/reeldramafilm/app
+          mkdir -p $D
+          cp mobile/native/StartIoPlugin.java mobile/native/MainActivity.java $D/
+          G=mobile/android/app/build.gradle
+          sed -i "0,/^dependencies {/s//dependencies {\n    implementation 'com.startapp:inapp-sdk:5.+'/" $G
+          grep -n "inapp-sdk" $G
+
       - name: Add AdMob app id
         env:
           ADMOB_APP_ID: ${{ secrets.ADMOB_APP_ID }}
