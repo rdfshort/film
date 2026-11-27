@@ -531,11 +531,15 @@ const ready0 = () => { $('#pv')?.classList.remove('loading'); $('#lsp')?.classLi
 
 // Interstitial ad (Android app only, free episodes only). It must NEVER block playback: any problem = skip the ad.
 let adN = 0, adReady = false, adInit = false, adErr = '', adBusy = null;
-function adPlugin() { const C = window.Capacitor; return NATIVE && C && C.Plugins && C.Plugins.AdMob; }
+function adPlugin() { const C = window.Capacitor, c = S.cfg && S.cfg.ads; if (!NATIVE || !C || !c) return null; const n = c.provider === 'startio' ? 'StartIo' : 'AdMob'; return (C.Plugins && C.Plugins[n]) || (c.provider === 'startio' && C.registerPlugin ? C.registerPlugin('StartIo') : null); }
 function prepAd() { return adBusy || (adBusy = prepAd0().finally(() => { adBusy = null; })); } // one load at a time
 async function prepAd0() {
   const A = adPlugin(), c = S.cfg && S.cfg.ads; if (!A || !c || !c.enabled) return;
   try {
+    if (c.provider === 'startio') {
+      if (!adInit) { await A.initialize({ appId: c.startioAppId, testing: !!c.testing }); adInit = true; }
+      await A.load(); adReady = true; return;
+    }
     if (!adInit) { await A.initialize({ initializeForTesting: !!c.testing }); adInit = true; }
     await A.prepareInterstitial({ adId: c.interstitialId, isTesting: !!c.testing }); adReady = true;
   } catch (e) { adReady = false; adErr = String((e && (e.message || e.errorMessage)) || JSON.stringify(e)).slice(0, 100); console.warn('[ads] prepare', e); if (c.debug) toast('Ad not loaded: ' + String((e && (e.message || e.errorMessage)) || JSON.stringify(e)).slice(0, 120)); }
@@ -550,6 +554,7 @@ async function maybeAd(few) {
   adReady = false; ready0();
   try {
     await Promise.race([new Promise(async res => {
+      if (c.provider === 'startio') { try { await A.show(); } catch {} return res(); }
       const hs = [];
       for (const ev of ['interstitialAdDismissed', 'interstitialAdFailedToShow']) { try { hs.push(await A.addListener(ev, () => res())); } catch {} }
       try { await A.showInterstitial(); } catch { res(); }
