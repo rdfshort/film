@@ -68,6 +68,10 @@ jobs:
           sed -i "s#inapp-sdk:5.+#inapp-sdk:5.5.2#" $G
           # Start.io 5.5.2 declares compileSdk 36; this project compiles against 34, so skip that build-time metadata check
           printf '\ntasks.configureEach { t -> if (t.name.endsWith("AarMetadata")) { t.enabled = false } }\n' >> $G
+          # Start.io needs Android 6.0 (API 23) or newer
+          V=mobile/android/variables.gradle
+          sed -i -E "s/minSdkVersion = [0-9]+/minSdkVersion = 23/" $V
+          grep -n "minSdkVersion" $V
           grep -n "inapp-sdk" $G
           tail -3 $G
 
