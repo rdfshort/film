@@ -55,7 +55,11 @@ jobs:
           cp mobile/native/StartIoPlugin.java mobile/native/MainActivity.java $D/
           G=mobile/android/app/build.gradle
           sed -i "0,/^dependencies {/s//dependencies {\n    implementation 'com.startapp:inapp-sdk:5.+'/" $G
+          sed -i "s#inapp-sdk:5.+#inapp-sdk:5.5.2#" $G
+          # Start.io 5.5.2 declares compileSdk 36; this project compiles against 34, so skip that build-time metadata check
+          printf '\ntasks.configureEach { t -> if (t.name.endsWith("AarMetadata")) { t.enabled = false } }\n' >> $G
           grep -n "inapp-sdk" $G
+          tail -3 $G
 
       - name: Add AdMob app id
         env:
